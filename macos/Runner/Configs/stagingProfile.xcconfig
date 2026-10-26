@@ -1,0 +1,6 @@
+#include "../../Flutter/stagingProfile.xcconfig"
+#include "Warnings.xcconfig"
+
+ASSET_PREFIX=staging
+BUNDLE_NAME=Texa Staging
+BUNDLE_DISPLAY_NAME=Texa Staging

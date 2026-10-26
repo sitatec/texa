@@ -1,0 +1,35 @@
+app:
+  android:
+    flavorDimensions: "app"
+
+flavors:
+  dev:
+    app:
+      name: "Texa Dev"
+    android:
+      applicationId: "dev.berete.texa.dev"
+    ios:
+      bundleId: "dev.berete.texa.dev"
+    macos:
+      bundleId: "dev.berete.texa.dev"
+    windows: {}
+  staging:
+    app:
+      name: "Texa Staging"
+    android:
+      applicationId: "dev.berete.texa.staging"
+    ios:
+      bundleId: "dev.berete.texa.staging"
+    macos:
+      bundleId: "dev.berete.texa.staging"
+    windows: {}
+  production:
+    app:
+      name: "Texa"
+    android:
+      applicationId: "dev.berete.texa"
+    ios:
+      bundleId: "dev.berete.texa"
+    macos:
+      bundleId: "dev.berete.texa"
+    windows: {}
