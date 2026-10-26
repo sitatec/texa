@@ -11,6 +11,10 @@ dependencies:
   flutter:
     sdk: flutter
 
+  dart_openai: ^8.0.0
+  flutter_drawing_board: ^1.0.1+2
+  flutter_quick_video_encoder: ^1.7.2
+
 
 dev_dependencies:
   flutter_test:

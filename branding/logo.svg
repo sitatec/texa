@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 1060" width="100%" height="100%">
+  <!-- Definitions & Styling -->
+  <defs>
+    <style>
+      .coral   { fill: #ef6666; }
+      .yellow  { fill: #fbbf24; }
+      .primary { fill: #3b82f6; }
+      .emerald { fill: #10b981; }
+    </style>
+  </defs>
+
+  <g id="letter-t" shape-rendering="geometricPrecision">
+    <!-- Top-Right Yellow Bar -->
+    <path class="yellow" d="
+      M 320,50
+      L 700,50
+      A 130,130 0 0 1 700,310
+      L 600,310
+      A 260,260 0 0 0 320,50
+      Z
+    " />
+
+    <!-- Top-Left Coral Red Bar -->
+    <path class="emerald" d="
+      M 170,50
+      L 420,50
+      A 360,260 0 0 1 600,310
+      L 170,310
+      A 130,130 0 0 1 170,50
+      Z
+    " />
+
+    <!-- Upper Vertical Stem (Primary Blue) with Smooth Fillet and Wave Cut -->
+    <path class="coral" d="
+      M 220,310
+      L 600,310
+      L 600,640
+      C 510,700 390,600 320,640
+      L 320,410
+      A 100,100 0 0 0 220,310
+      Z
+    " />
+
+    <!-- Lower Vertical Stem (Emerald Green) with Matching Wave & Rounded Cap -->
+    <path class="primary" d="
+      M 320,440
+      C 490,480 510,400 600,310
+      L 600,780
+      A 130,130 0 0 1 320,780
+      Z
+    " />
+  </g>
+</svg>
