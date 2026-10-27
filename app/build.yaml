@@ -1,0 +1,34 @@
+targets:
+  $default:
+    builders:
+      source_gen|combining_builder:
+        options:
+          build_extensions:
+            '^lib/{{}}.dart': 'lib/generated/{{}}.g.dart'
+
+      slang_build_runner:
+        enabled: true
+        options:
+          base_locale: en
+          fallback_strategy: base_locale
+          input_directory: lib/i18n
+          input_file_pattern: .i18n.json
+          output_directory: lib/generated/i18n
+          output_file_name: translations.g.dart
+          translate_var: tr
+          enum_name: AppLocale
+          class_name: Translations
+          flutter_integration: true
+          namespaces: false
+          key_case: camel
+          key_map_case: camel
+          param_case: camel
+          string_interpolation: braces
+          format:
+            enabled: true
+            width: 120
+          autodoc:
+            enabled: true
+            locales:
+              - en
+              - fr
