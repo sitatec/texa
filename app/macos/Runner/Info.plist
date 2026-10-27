@@ -28,5 +28,9 @@
     <string>MainMenu</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
-  </dict>
+    <key>NSMicrophoneUsageDescription</key>
+  <string>Texa listens so you can talk to your tutor while you draw. Your voice is sent to Meta AI only when you speak to the tutor.</string>
+  <key>NSAppTransportSecurity</key>
+  <dict><key>NSAllowsLocalNetworking</key><true/></dict>
+</dict>
 </plist>
