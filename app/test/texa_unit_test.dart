@@ -8,6 +8,9 @@ import 'package:texa/features/board/plotter.dart';
 import 'package:texa/features/playback/playback_engine.dart';
 import 'package:texa/features/playback/speech_chunker.dart';
 import 'package:texa/features/playback/wav_builder.dart';
+import 'package:texa/data/db.dart';
+import 'package:texa/data/models.dart';
+import 'package:texa/features/ai/utils/file_edit.dart';
 
 void main() {
   test('streaming splitter emits only at sentence endpoints', () {
@@ -69,5 +72,55 @@ void main() {
     final back = BoardSnapshot.decode(snap.encode());
     expect(back.registry.keys, contains('eq_main'));
     expect(back.elements.single.latex, r'x^2');
+  });
+
+  test('notebook edits seed a blank notebook and apply later edits', () {
+    final seeded = applyNotebookEdits('', [
+      Edit(oldText: '', newText: 'Struggles with fractions.'),
+    ]);
+    expect(seeded, 'Struggles with fractions.');
+    final updated = applyNotebookEdits(seeded, [
+      Edit(oldText: 'fractions', newText: 'fraction addition'),
+    ]);
+    expect(updated, 'Struggles with fraction addition.');
+  });
+  test('observation is clamped to two paragraphs', () {
+    expect(clampToTwoParagraphs('One.\n\nTwo.\n\nThree.'), 'One.\n\nTwo.');
+    expect(clampToTwoParagraphs('Only one.'), 'Only one.');
+  });
+  test('observation search filters by content, date and both', () {
+    final all = [
+      SessionObservation(
+        sessionId: 'a',
+        date: DateTime(2026, 1, 5),
+        content: 'Confident with Fractions now',
+      ),
+      SessionObservation(
+        sessionId: 'b',
+        date: DateTime(2026, 2, 10),
+        content: 'Quiet when unsure',
+      ),
+      SessionObservation(
+        sessionId: 'c',
+        date: DateTime(2026, 3, 15),
+        content: 'fractions clicked after drawing',
+      ),
+    ];
+    final db = AppDb.memory();
+    expect(db.searchObservations(all, query: 'FRACTIONS').length, 2);
+    expect(db.searchObservations(all, from: DateTime(2026, 2, 1)).length, 2);
+    expect(
+      db
+          .searchObservations(
+            all,
+            query: 'fractions',
+            from: DateTime(2026, 2, 1),
+            to: DateTime(2026, 12, 31),
+          )
+          .single
+          .sessionId,
+      'c',
+    );
+    expect(db.searchObservations(all, query: 'nothing').isEmpty, isTrue);
   });
 }

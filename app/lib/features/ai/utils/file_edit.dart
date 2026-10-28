@@ -418,3 +418,26 @@ String applyEdits(String content, List<Edit> edits) {
   final restoredContent = _restoreLineEndings(newContent, originalEnding);
   return hasBom ? '\uFEFF$restoredContent' : restoredContent;
 }
+
+/// Applies AI notebook edits to [current] text.
+///
+/// A blank notebook accepts a single edit whose old text is empty: that
+/// edit's new text becomes the initial content.
+String applyNotebookEdits(String current, List<Edit> edits) {
+  if (edits.isEmpty) return current;
+  if (current.trim().isEmpty &&
+      edits.length == 1 &&
+      edits.first.oldText.isEmpty) {
+    return edits.first.newText.trim();
+  }
+  return applyEdits(current, edits).trim();
+}
+
+/// Keeps at most the first two paragraphs of [text].
+String clampToTwoParagraphs(String text) {
+  final parts = text
+      .split(RegExp(r'\n\s*\n'))
+      .where((e) => e.trim().isNotEmpty)
+      .toList();
+  return parts.take(2).join('\n\n');
+}

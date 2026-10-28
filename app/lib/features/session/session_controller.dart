@@ -17,6 +17,7 @@ import '../../core/errors.dart';
 import '../../data/db.dart';
 import '../../data/models.dart';
 import '../ai/ai_actions.dart';
+import '../ai/utils/file_edit.dart';
 import '../ai/ai_client.dart';
 import '../board/board_models.dart';
 import '../playback/playback_engine.dart';
@@ -50,6 +51,10 @@ class SessionController extends ChangeNotifier {
   String? errorMessage;
   String? lastFailedText;
   List<ChatMessage> messages = [];
+  String memoryText = '';
+  List<SessionObservation> observations = [];
+  String sessionObservation = '';
+  String? _searchResultsText;
   bool _disposed = false;
 
   final AudioRecorder _recorder = AudioRecorder();
@@ -104,6 +109,14 @@ class SessionController extends ChangeNotifier {
   Future<void> init() async {
     captionsOn = settings.captionsDefault;
     messages = await db.loadMessages(session.id);
+    memoryText = await db.loadMemory();
+    observations = await db.loadObservations();
+    sessionObservation =
+        observations
+            .where((o) => o.sessionId == session.id)
+            .firstOrNull
+            ?.content ??
+        '';
     board.restore(BoardSnapshot.decode(await db.loadBoard(session.id)));
     board.addListener(_scheduleSave);
     if (!settings.micPermissionDenied) await startListening();
@@ -330,7 +343,12 @@ class SessionController extends ChangeNotifier {
 
   // ---------- Sending a turn (streaming) ----------
   /// Sends the current board (typed question and/or drawing-only ask).
-  Future<void> askTexa(String typedText) async {
+  Future<void> askTexa(
+    String typedText, {
+    List<({String name, String mimeType, String? base64, String? text})>
+        uploads =
+        const [],
+  }) async {
     if (state == TurnState.thinking) return;
     await _captureFrame();
     final suspended = _suspended;
@@ -339,6 +357,7 @@ class SessionController extends ChangeNotifier {
       pcmBytes: Uint8List(0),
       typedText: typedText,
       interruption: suspended,
+      uploads: uploads,
     );
   }
 
@@ -346,6 +365,9 @@ class SessionController extends ChangeNotifier {
     required Uint8List pcmBytes,
     String? typedText,
     SuspendedPlayback? interruption,
+    List<({String name, String mimeType, String? base64, String? text})>
+        uploads =
+        const [],
   }) async {
     state = TurnState.thinking;
     errorMessage = null;
@@ -382,7 +404,14 @@ class SessionController extends ChangeNotifier {
         videoB64: videoB64,
         typedText: typedText,
         interruption: interruption,
+        uploads: uploads,
       );
+      // A search during that reply gets its results in one follow-up request.
+      final results = _searchResultsText;
+      _searchResultsText = null;
+      if (results != null && results.isNotEmpty) {
+        await _streamReply(extraContext: results);
+      }
     } on AppError catch (e) {
       errorMessage = e.message;
       await db.appendLog('turn failed: ${e.message} ${e.cause ?? ''}');
@@ -456,6 +485,10 @@ class SessionController extends ChangeNotifier {
     String? videoB64,
     String? typedText,
     SuspendedPlayback? interruption,
+    List<({String name, String mimeType, String? base64, String? text})>
+        uploads =
+        const [],
+    String? extraContext,
   }) async {
     final client = AiClient(settings.apiKey);
     _activeClient = client;
@@ -482,6 +515,11 @@ class SessionController extends ChangeNotifier {
         typedText: typedText,
         interruptionContext: interruption?.toContext(),
         subject: session.subject,
+        studentMemory: memoryText,
+        recentObservations: observations.take(3).toList(),
+        currentObservation: sessionObservation,
+        uploads: uploads,
+        extraContext: extraContext,
       )) {
         if (generation != _playbackGeneration) break;
         if (event is AiTextDelta) {
@@ -515,7 +553,9 @@ class SessionController extends ChangeNotifier {
           for (final s in splitter.flush()) {
             _queue.add(TextItem(s));
           }
-          if (event.name == 'resume_explanation') {
+          if (event.name == 'search_session_observations') {
+            _runObservationSearch(event.args);
+          } else if (event.name == 'resume_explanation') {
             _queue.add(ResumeItem());
           } else {
             _queue.add(ActionItem(event.name, event.args));
@@ -627,7 +667,60 @@ class SessionController extends ChangeNotifier {
     }
   }
 
+  void _runObservationSearch(Map<String, dynamic> args) {
+    DateTime? parseDate(String? v) => v == null ? null : DateTime.tryParse(v);
+    final results = db.searchObservations(
+      observations,
+      query: args['query'] as String?,
+      from: parseDate(args['from'] as String?),
+      to: parseDate(args['to'] as String?),
+    );
+    _searchResultsText = results.isEmpty
+        ? 'Your search of past session observations found nothing. Continue the student\'s turn without that history.'
+        : 'Results of your search of past session observations: ${results.map((o) => '[${o.date.toIso8601String().substring(0, 10)}] ${o.content}').join(' ')} Use these to continue answering the student\'s last turn; do not redraw steps already on the board.';
+  }
+
+  String _applyNotebookEdits(String current, Object? rawEdits) {
+    final edits = <Edit>[];
+    if (rawEdits is List) {
+      for (final e in rawEdits) {
+        if (e is Map) {
+          edits.add(
+            Edit(
+              oldText: (e['old_text'] ?? e['oldText'] ?? '') as String,
+              newText: (e['new_text'] ?? e['newText'] ?? '') as String,
+            ),
+          );
+        }
+      }
+    }
+    return applyNotebookEdits(current, edits);
+  }
+
   Future<void> _executeAction(ActionItem item) async {
+    if (item.tool == 'update_session_observation' ||
+        item.tool == 'update_memory') {
+      try {
+        if (item.tool == 'update_session_observation') {
+          sessionObservation = clampToTwoParagraphs(
+            _applyNotebookEdits(sessionObservation, item.args['edits']),
+          );
+          await db.saveObservation(session.id, sessionObservation);
+          observations = await db.loadObservations();
+        } else {
+          memoryText = _applyNotebookEdits(memoryText, item.args['edits']);
+          await db.saveMemory(memoryText);
+        }
+      } catch (e) {
+        await db.appendLog('notebook update skipped: $e');
+      }
+      final speech = item.speech;
+      if (speech != null && speech.isNotEmpty) {
+        speaker.enqueueText(speech);
+        await speaker.drained;
+      }
+      return;
+    }
     final rect = board.rectForArgs(item.args);
     if (rect != null && item.tool != 'remove_element') {
       await board.frameRect(clampToBoard(rect));

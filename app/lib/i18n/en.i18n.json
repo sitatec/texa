@@ -1,94 +1,418 @@
 {
-  "app": {"title": "Texa", "@title": {"description": "App title shown in the app bar and system UI."}},
+  "app": {
+    "title": "Texa",
+    "@title": {
+      "description": "App title shown in the app bar and system UI."
+    }
+  },
   "common": {
-    "cancel": "Cancel", "@cancel": {"description": "Cancel button in dialogs."},
-    "delete": "Delete", "@delete": {"description": "Delete button in dialogs and menus."},
-    "rename": "Rename", "@rename": {"description": "Rename action in a session overflow menu."},
-    "save": "Save", "@save": {"description": "Save button in dialogs."},
-    "retry": "Retry", "@retry": {"description": "Retry button after a failure."},
-    "continue": "Continue", "@continue": {"description": "Continue button in setup."},
-    "back": "Back", "@back": {"description": "Back button tooltip."},
-    "close": "Close", "@close": {"description": "Close button tooltip."}
+    "cancel": "Cancel",
+    "@cancel": {
+      "description": "Cancel button in dialogs."
+    },
+    "delete": "Delete",
+    "@delete": {
+      "description": "Delete button in dialogs and menus."
+    },
+    "rename": "Rename",
+    "@rename": {
+      "description": "Rename action in a session overflow menu."
+    },
+    "save": "Save",
+    "@save": {
+      "description": "Save button in dialogs."
+    },
+    "retry": "Retry",
+    "@retry": {
+      "description": "Retry button after a failure."
+    },
+    "continue": "Continue",
+    "@continue": {
+      "description": "Continue button in setup."
+    },
+    "back": "Back",
+    "@back": {
+      "description": "Back button tooltip."
+    },
+    "close": "Close",
+    "@close": {
+      "description": "Close button tooltip."
+    },
+    "maxReached": "You can add up to {max} files",
+    "@maxReached": {
+      "description": "Error shown when the maximum number of files is reached. {max} is the limit."
+    },
+    "validationIndicatingMinimum": "Add at least {min} file(s)",
+    "@validationIndicatingMinimum": {
+      "description": "Validation message when too few files are selected. {min} is the minimum."
+    },
+    "validationIndicatingMaximum": "Add at most {max} files",
+    "@validationIndicatingMaximum": {
+      "description": "Validation message when too many files are selected. {max} is the maximum."
+    }
   },
   "setup": {
-    "welcomeTitle": "Your AI tutor that draws with you", "@welcomeTitle": {"description": "Headline on the first-launch welcome screen."},
-    "welcomeBody": "Draw on the shared board, talk out loud, and Texa will explain step by step — writing, drawing and pointing right on your work.", "@welcomeBody": {"description": "Explanation on the welcome screen."},
-    "privacyNote": "Your board and voice are sent to Meta AI so the tutor can see and hear your work. Nothing is sent to Texa servers — there are none.", "@privacyNote": {"description": "Privacy note in setup and Settings."},
-    "apiKeyLabel": "Meta AI API key", "@apiKeyLabel": {"description": "Label for the API key field in setup and Settings."},
-    "apiKeyHint": "Paste your API key", "@apiKeyHint": {"description": "Placeholder in the API key field."},
-    "testConnection": "Test connection", "@testConnection": {"description": "Button that checks the API key works."},
-    "testing": "Testing…", "@testing": {"description": "Shown while the connection test runs."},
-    "connectionOk": "Connection works — you are ready.", "@connectionOk": {"description": "Success message after testing the API key."},
-    "connectionFailed": "That key did not work. Check it and try again.", "@connectionFailed": {"description": "Error after a failed connection test."},
-    "micTitle": "Talk while you draw", "@micTitle": {"description": "Heading for the microphone permission step."},
-    "micBody": "Texa listens so you can explain your thinking out loud. You can use Texa without the microphone, drawing and typing instead.", "@micBody": {"description": "Explanation for microphone permission."},
-    "allowMic": "Allow microphone", "@allowMic": {"description": "Button requesting microphone permission."},
-    "skipMic": "Continue without microphone", "@skipMic": {"description": "Button to continue without microphone permission."},
-    "modelsTitle": "Setting up speech", "@modelsTitle": {"description": "Heading while on-device speech models download."},
-    "modelsBody": "Texa downloads its on-device voice models once. This can take a few minutes on a slow connection.", "@modelsBody": {"description": "Explanation on the model download screen."},
-    "modelsReady": "Speech is ready", "@modelsReady": {"description": "Shown when speech models are installed and verified."},
-    "modelsFailed": "Speech models could not be set up.", "@modelsFailed": {"description": "Error on the model download screen."},
-    "downloading": "Downloading {name}… {percent}%", "@downloading": {"description": "Download progress. {name} is the model name, {percent} is 0-100."}
+    "welcomeTitle": "Your AI tutor that draws with you",
+    "@welcomeTitle": {
+      "description": "Headline on the first-launch welcome screen."
+    },
+    "welcomeBody": "Draw on the shared board, talk out loud, and Texa will explain step by step — writing, drawing and pointing right on your work.",
+    "@welcomeBody": {
+      "description": "Explanation on the welcome screen."
+    },
+    "privacyNote": "Your board and voice are sent to Meta AI so the tutor can see and hear your work. Nothing is sent to Texa servers — there are none.",
+    "@privacyNote": {
+      "description": "Privacy note in setup and Settings."
+    },
+    "apiKeyLabel": "Meta AI API key",
+    "@apiKeyLabel": {
+      "description": "Label for the API key field in setup and Settings."
+    },
+    "apiKeyHint": "Paste your API key",
+    "@apiKeyHint": {
+      "description": "Placeholder in the API key field."
+    },
+    "testConnection": "Test connection",
+    "@testConnection": {
+      "description": "Button that checks the API key works."
+    },
+    "testing": "Testing…",
+    "@testing": {
+      "description": "Shown while the connection test runs."
+    },
+    "connectionOk": "Connection works — you are ready.",
+    "@connectionOk": {
+      "description": "Success message after testing the API key."
+    },
+    "connectionFailed": "That key did not work. Check it and try again.",
+    "@connectionFailed": {
+      "description": "Error after a failed connection test."
+    },
+    "micTitle": "Talk while you draw",
+    "@micTitle": {
+      "description": "Heading for the microphone permission step."
+    },
+    "micBody": "Texa listens so you can explain your thinking out loud. You can use Texa without the microphone, drawing and typing instead.",
+    "@micBody": {
+      "description": "Explanation for microphone permission."
+    },
+    "allowMic": "Allow microphone",
+    "@allowMic": {
+      "description": "Button requesting microphone permission."
+    },
+    "skipMic": "Continue without microphone",
+    "@skipMic": {
+      "description": "Button to continue without microphone permission."
+    },
+    "modelsTitle": "Setting up speech",
+    "@modelsTitle": {
+      "description": "Heading while on-device speech models download."
+    },
+    "modelsBody": "Texa downloads its on-device voice models once. This can take a few minutes on a slow connection.",
+    "@modelsBody": {
+      "description": "Explanation on the model download screen."
+    },
+    "modelsReady": "Speech is ready",
+    "@modelsReady": {
+      "description": "Shown when speech models are installed and verified."
+    },
+    "modelsFailed": "Speech models could not be set up.",
+    "@modelsFailed": {
+      "description": "Error on the model download screen."
+    },
+    "downloading": "Downloading {name}… {percent}%",
+    "@downloading": {
+      "description": "Download progress. {name} is the model name, {percent} is 0-100."
+    }
   },
   "home": {
-    "title": "Texa", "@title": {"description": "Home screen title."},
-    "newSession": "New session", "@newSession": {"description": "Primary button on Home. Opens the model picker and creates a session."},
-    "emptyTitle": "Start learning with Texa", "@emptyTitle": {"description": "Empty-state heading when there are no sessions."},
-    "emptyBody": "Create a session, draw your problem on the board, and talk Texa through it.", "@emptyBody": {"description": "Empty-state explanation on Home."},
-    "settings": "Settings", "@settings": {"description": "Settings button tooltip on Home."},
-    "deleteSessionTitle": "Delete this session?", "@deleteSessionTitle": {"description": "Confirmation dialog title for deleting a session."},
-    "deleteSessionBody": "Its board and history will be permanently deleted from this device.", "@deleteSessionBody": {"description": "Confirmation dialog body for deleting a session."},
-    "renameTitle": "Rename session", "@renameTitle": {"description": "Rename dialog title."},
-    "sessionName": "Session name", "@sessionName": {"description": "Text field label in the rename dialog."},
-    "chooseModel": "Choose the AI model", "@chooseModel": {"description": "Heading in the model picker shown when creating a session."},
-    "chooseModelBody": "This model will tutor this session. It cannot be changed later.", "@chooseModelBody": {"description": "Explanation in the model picker."},
-    "modelNameLabel": "Model name", "@modelNameLabel": {"description": "Text field for typing a model name in the picker."},
-    "loadModels": "Load available models", "@loadModels": {"description": "Button that fetches the model list from the API."},
-    "createSession": "Create session", "@createSession": {"description": "Confirm button in the model picker."}
+    "title": "Texa",
+    "@title": {
+      "description": "Home screen title."
+    },
+    "newSession": "New session",
+    "@newSession": {
+      "description": "Primary button on Home. Opens the model picker and creates a session."
+    },
+    "emptyTitle": "Start learning with Texa",
+    "@emptyTitle": {
+      "description": "Empty-state heading when there are no sessions."
+    },
+    "emptyBody": "Create a session, draw your problem on the board, and talk Texa through it.",
+    "@emptyBody": {
+      "description": "Empty-state explanation on Home."
+    },
+    "settings": "Settings",
+    "@settings": {
+      "description": "Settings button tooltip on Home."
+    },
+    "deleteSessionTitle": "Delete this session?",
+    "@deleteSessionTitle": {
+      "description": "Confirmation dialog title for deleting a session."
+    },
+    "deleteSessionBody": "Its board and history will be permanently deleted from this device.",
+    "@deleteSessionBody": {
+      "description": "Confirmation dialog body for deleting a session."
+    },
+    "renameTitle": "Rename session",
+    "@renameTitle": {
+      "description": "Rename dialog title."
+    },
+    "sessionName": "Session name",
+    "@sessionName": {
+      "description": "Text field label in the rename dialog."
+    },
+    "chooseModel": "Choose the AI model",
+    "@chooseModel": {
+      "description": "Heading in the model picker shown when creating a session."
+    },
+    "chooseModelBody": "This model will tutor this session. It cannot be changed later.",
+    "@chooseModelBody": {
+      "description": "Explanation in the model picker."
+    },
+    "modelNameLabel": "Model name",
+    "@modelNameLabel": {
+      "description": "Text field for typing a model name in the picker."
+    },
+    "loadModels": "Load available models",
+    "@loadModels": {
+      "description": "Button that fetches the model list from the API."
+    },
+    "createSession": "Create session",
+    "@createSession": {
+      "description": "Confirm button in the model picker."
+    }
   },
   "session": {
-    "listening": "Listening…", "@listening": {"description": "Status pill when Texa is listening."},
-    "capturing": "Listening — I can hear you", "@capturing": {"description": "Status pill while the student is speaking."},
-    "thinking": "Thinking…", "@thinking": {"description": "Status pill while waiting for the AI reply."},
-    "speaking": "Speaking…", "@speaking": {"description": "Status pill while Texa speaks and draws."},
-    "muted": "Microphone off", "@muted": {"description": "Status pill when the microphone is muted."},
-    "drawOnlyHint": "Draw-only mode — type your question below, or enable the microphone in Settings.", "@drawOnlyHint": {"description": "Hint shown when microphone permission was denied."},
-    "listenHint": "I'm listening — tell me what you're doing", "@listenHint": {"description": "Hint encouraging the student to speak while drawing."},
-    "askTexa": "Ask Texa", "@askTexa": {"description": "Button that sends the current board and typed question to the tutor."},
-    "typeQuestion": "Type your question (optional)…", "@typeQuestion": {"description": "Placeholder for the typed question field."},
-    "stop": "Stop", "@stop": {"description": "Button that stops AI speech and drawing."},
-    "pen": "Pen", "@pen": {"description": "Pen tool tooltip."},
-    "eraser": "Eraser", "@eraser": {"description": "Eraser tool tooltip."},
-    "undo": "Undo", "@undo": {"description": "Undo tooltip."},
-    "redo": "Redo", "@redo": {"description": "Redo tooltip."},
-    "clearBoard": "Clear board", "@clearBoard": {"description": "Clear board tooltip."},
-    "clearTitle": "Clear the board?", "@clearTitle": {"description": "Confirmation title before clearing the board."},
-    "clearBody": "Everything on the board will be erased. This cannot be undone.", "@clearBody": {"description": "Confirmation body before clearing the board."},
-    "micOn": "Mute microphone", "@micOn": {"description": "Tooltip to mute the microphone."},
-    "micOff": "Unmute microphone", "@micOff": {"description": "Tooltip to unmute the microphone."},
-    "captionsOn": "Turn captions off", "@captionsOn": {"description": "Tooltip to hide captions."},
-    "captionsOff": "Turn captions on", "@captionsOff": {"description": "Tooltip to show captions."},
-    "fullscreen": "Fullscreen", "@fullscreen": {"description": "Fullscreen toggle tooltip."},
-    "more": "More options", "@more": {"description": "More button tooltip on compact layouts."},
-    "subject": "Subject", "@subject": {"description": "Label for the optional subject selector."},
-    "retryTurn": "Retry turn", "@retryTurn": {"description": "Button that re-sends the last turn after a failure."},
-    "history": "History", "@history": {"description": "Button opening the conversation history sheet."},
-    "noHistory": "Nothing here yet. Draw and ask your first question.", "@noHistory": {"description": "Empty text in the history sheet."}
+    "listening": "Listening…",
+    "@listening": {
+      "description": "Status pill when Texa is listening."
+    },
+    "capturing": "Listening — I can hear you",
+    "@capturing": {
+      "description": "Status pill while the student is speaking."
+    },
+    "thinking": "Thinking…",
+    "@thinking": {
+      "description": "Status pill while waiting for the AI reply."
+    },
+    "speaking": "Speaking…",
+    "@speaking": {
+      "description": "Status pill while Texa speaks and draws."
+    },
+    "muted": "Microphone off",
+    "@muted": {
+      "description": "Status pill when the microphone is muted."
+    },
+    "drawOnlyHint": "Draw-only mode — type your question below, or enable the microphone in Settings.",
+    "@drawOnlyHint": {
+      "description": "Hint shown when microphone permission was denied."
+    },
+    "listenHint": "I'm listening — tell me what you're doing",
+    "@listenHint": {
+      "description": "Hint encouraging the student to speak while drawing."
+    },
+    "askTexa": "Ask Texa",
+    "@askTexa": {
+      "description": "Button that sends the current board and typed question to the tutor."
+    },
+    "typeQuestion": "Type your question (optional)…",
+    "@typeQuestion": {
+      "description": "Placeholder for the typed question field."
+    },
+    "stop": "Stop",
+    "@stop": {
+      "description": "Button that stops AI speech and drawing."
+    },
+    "pen": "Pen",
+    "@pen": {
+      "description": "Pen tool tooltip."
+    },
+    "eraser": "Eraser",
+    "@eraser": {
+      "description": "Eraser tool tooltip."
+    },
+    "undo": "Undo",
+    "@undo": {
+      "description": "Undo tooltip."
+    },
+    "redo": "Redo",
+    "@redo": {
+      "description": "Redo tooltip."
+    },
+    "clearBoard": "Clear board",
+    "@clearBoard": {
+      "description": "Clear board tooltip."
+    },
+    "clearTitle": "Clear the board?",
+    "@clearTitle": {
+      "description": "Confirmation title before clearing the board."
+    },
+    "clearBody": "Everything on the board will be erased. This cannot be undone.",
+    "@clearBody": {
+      "description": "Confirmation body before clearing the board."
+    },
+    "micOn": "Mute microphone",
+    "@micOn": {
+      "description": "Tooltip to mute the microphone."
+    },
+    "micOff": "Unmute microphone",
+    "@micOff": {
+      "description": "Tooltip to unmute the microphone."
+    },
+    "captionsOn": "Turn captions off",
+    "@captionsOn": {
+      "description": "Tooltip to hide captions."
+    },
+    "captionsOff": "Turn captions on",
+    "@captionsOff": {
+      "description": "Tooltip to show captions."
+    },
+    "fullscreen": "Fullscreen",
+    "@fullscreen": {
+      "description": "Fullscreen toggle tooltip."
+    },
+    "more": "More options",
+    "@more": {
+      "description": "More button tooltip on compact layouts."
+    },
+    "subject": "Subject",
+    "@subject": {
+      "description": "Label for the optional subject selector."
+    },
+    "retryTurn": "Retry turn",
+    "@retryTurn": {
+      "description": "Button that re-sends the last turn after a failure."
+    },
+    "history": "History",
+    "@history": {
+      "description": "Button opening the conversation history sheet."
+    },
+    "noHistory": "Nothing here yet. Draw and ask your first question.",
+    "@noHistory": {
+      "description": "Empty text in the history sheet."
+    },
+    "inputFile": {
+      "addFiles": "Add files",
+      "@addFiles": {
+        "description": "Button that opens the file upload modal."
+      },
+      "uploadTitle": "Add files",
+      "@uploadTitle": {
+        "description": "Title of the file upload modal."
+      },
+      "imageGallery": "Photo gallery",
+      "@imageGallery": {
+        "description": "Upload option: pick images from the gallery."
+      },
+      "camera": "Camera",
+      "@camera": {
+        "description": "Upload option: take a photo with the camera."
+      },
+      "selectFiles": "Browse files",
+      "@selectFiles": {
+        "description": "Upload option: pick files from storage."
+      },
+      "recordAudio": "Record audio",
+      "@recordAudio": {
+        "description": "Upload option: record audio in the app."
+      },
+      "recordAudioTooltip": "Record audio",
+      "@recordAudioTooltip": {
+        "description": "Tooltip for the record audio button."
+      },
+      "fileTooLarge": "Files must be {sizeInMb} MB or smaller",
+      "@fileTooLarge": {
+        "description": "Error when a file exceeds the size limit. {sizeInMb} is the limit in megabytes."
+      },
+      "noFilesYet": "No files selected yet. Choose an option above to add some.",
+      "@noFilesYet": {
+        "description": "Empty state in the upload modal grid."
+      },
+      "filesAttached": "{count} file(s) attached",
+      "@filesAttached": {
+        "description": "Label on the file control showing how many files are attached. {count} is the number."
+      },
+      "removeFile": "Remove file",
+      "@removeFile": {
+        "description": "Tooltip for removing a selected file."
+      }
+    }
   },
   "settings": {
-    "title": "Settings", "@title": {"description": "Settings screen title."},
-    "apiSection": "Meta AI connection", "@apiSection": {"description": "Section heading for API settings."},
-    "captionsDefault": "Captions on by default", "@captionsDefault": {"description": "Switch for the default captions setting."},
-    "playbackSection": "Playback", "@playbackSection": {"description": "Section heading for playback settings."},
-    "dataSection": "Your data", "@dataSection": {"description": "Section heading for data settings."},
-    "deleteAll": "Delete all sessions and remove API key", "@deleteAll": {"description": "Danger button that wipes all local data."},
-    "deleteAllTitle": "Delete everything?", "@deleteAllTitle": {"description": "Confirmation title for wiping all data."},
-    "deleteAllBody": "All sessions, boards and your API key will be removed from this device.", "@deleteAllBody": {"description": "Confirmation body for wiping all data."},
-    "logs": "Debug logs", "@logs": {"description": "Section heading for local debug logs."},
-    "saved": "Saved", "@saved": {"description": "Confirmation shown after saving settings."}
+    "title": "Settings",
+    "@title": {
+      "description": "Settings screen title."
+    },
+    "apiSection": "Meta AI connection",
+    "@apiSection": {
+      "description": "Section heading for API settings."
+    },
+    "captionsDefault": "Captions on by default",
+    "@captionsDefault": {
+      "description": "Switch for the default captions setting."
+    },
+    "playbackSection": "Playback",
+    "@playbackSection": {
+      "description": "Section heading for playback settings."
+    },
+    "dataSection": "Your data",
+    "@dataSection": {
+      "description": "Section heading for data settings."
+    },
+    "deleteAll": "Delete all sessions and remove API key",
+    "@deleteAll": {
+      "description": "Danger button that wipes all local data."
+    },
+    "deleteAllTitle": "Delete everything?",
+    "@deleteAllTitle": {
+      "description": "Confirmation title for wiping all data."
+    },
+    "deleteAllBody": "All sessions, boards and your API key will be removed from this device.",
+    "@deleteAllBody": {
+      "description": "Confirmation body for wiping all data."
+    },
+    "logs": "Debug logs",
+    "@logs": {
+      "description": "Section heading for local debug logs."
+    },
+    "saved": "Saved",
+    "@saved": {
+      "description": "Confirmation shown after saving settings."
+    },
+    "memorySection": "Tutor memory",
+    "@memorySection": {
+      "description": "Section heading for the tutor's long-term memory of the student."
+    },
+    "memoryDescription": "What Texa remembers about the student across all sessions: level, goals, preferences and learning patterns. Texa updates this itself; you can also edit it here.",
+    "@memoryDescription": {
+      "description": "Explains what the long-term memory is and that the user can edit it."
+    },
+    "memoryLabel": "Memory",
+    "@memoryLabel": {
+      "description": "Label for the editable long-term memory text field."
+    },
+    "memoryHint": "Nothing remembered yet.",
+    "@memoryHint": {
+      "description": "Placeholder for an empty long-term memory."
+    }
   },
   "errors": {
-    "network": "Could not reach Meta AI. Check your connection and try again.", "@network": {"description": "Plain-language network error."},
-    "turnFailed": "That turn could not be sent. Your work is safe on the board.", "@turnFailed": {"description": "Error banner after a failed turn."}
+    "network": "Could not reach Meta AI. Check your connection and try again.",
+    "@network": {
+      "description": "Plain-language network error."
+    },
+    "turnFailed": "That turn could not be sent. Your work is safe on the board.",
+    "@turnFailed": {
+      "description": "Error banner after a failed turn."
+    }
+  },
+  "core": {
+    "files": {
+      "recordingMaxDuration": "Maximum recording length reached",
+      "@recordingMaxDuration": {
+        "description": "Shown when an audio recording reaches its maximum length."
+      }
+    }
   }
 }

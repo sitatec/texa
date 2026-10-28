@@ -144,3 +144,26 @@ String relativeTime(DateTime t) {
   if (d.inDays < 7) return '${d.inDays}d ago';
   return '${t.day}/${t.month}/${t.year}';
 }
+
+/// One session's observation note about the student.
+class SessionObservation {
+  const SessionObservation({
+    required this.sessionId,
+    required this.date,
+    required this.content,
+  });
+  final String sessionId;
+  final DateTime date;
+  final String content;
+  Map<String, Object?> toJson() => {
+    'sessionId': sessionId,
+    'date': date.toIso8601String(),
+    'content': content,
+  };
+  factory SessionObservation.fromJson(Map<String, dynamic> j) =>
+      SessionObservation(
+        sessionId: j['sessionId'] as String,
+        date: DateTime.tryParse(j['date'] as String? ?? '') ?? DateTime.now(),
+        content: j['content'] as String? ?? '',
+      );
+}

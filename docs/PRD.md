@@ -4,8 +4,8 @@
 |---|---|
 | Product | Texa — AI STEM Tutor |
 | Tagline | The personal AI tutor for everyone |
-| Document version | 1.5 |
-| Version history | v1.1: fixed Meta AI base URL, per-session immutable model, confirmed 1200×1600 board, no mid-turn recovery. v1.2: voice barge-in, natural turn judgement, whiteboard etiquette. v1.3: `<[IGNORE_TURN]>` sentinel (not a tool), AI element identifiers + edit/remove of own elements, first-launch model downloads, platform-setup requirements, slang (English-only) and code-quality standards (Tech Specs §16–§19). v1.4: corrected Kokoro model to v1_1, supported platforms are Android/iOS/macOS/Web with Windows planned. v1.5 (27 Oct 2026): model files moved out of Flutter assets to `app/models/` and served in development by `app/startserver.sh`; model URLs are dart-defines defaulting to the production URLs, set for local development in `.vscode/launch.json` |
+| Document version | 1.6 |
+| Version history | v1.1: fixed Meta AI base URL, per-session immutable model, confirmed 1200×1600 board, no mid-turn recovery. v1.2: voice barge-in, natural turn judgement, whiteboard etiquette. v1.3: `<[IGNORE_TURN]>` sentinel (not a tool), AI element identifiers + edit/remove of own elements, first-launch model downloads, platform-setup requirements, slang (English-only) and code-quality standards (Tech Specs §16–§19). v1.4: corrected Kokoro model to v1_1, supported platforms are Android/iOS/macOS/Web with Windows planned. v1.6 (27 Oct 2026): file uploads (modal picker with preview grid), attempt-first pedagogy, per-session Session Observation, cross-session student Memory and observation search. v1.5 (27 Oct 2026): model files moved out of Flutter assets to `app/models/` and served in development by `app/startserver.sh`; model URLs are dart-defines defaulting to the production URLs, set for local development in `.vscode/launch.json` |
 | Status | Draft for prototype (MVP) |
 | Date | 27 October 2026 |
 | Platform | Flutter — Android, iOS, macOS, and Web (mobile is the primary target). Windows is planned but not a supported/tested platform in this version |
@@ -187,6 +187,27 @@ App
 | App backgrounded/killed | No special recovery flow in this version. Messages are saved to the local DB as they are sent and received, and board state is autosaved, so history and board are intact on relaunch |
 | Very long session | Board/history remain performant; oldest turn media pruned per retention policy (FR-DA-03) |
 
+
+### F-10 — Uploading files to a session
+1. Tapping the file control in the session composer opens a modal. The modal offers the upload sources that make sense on the current platform (e.g. photo gallery and camera on mobile, file picker on desktop/web, plus in-app audio recording when audio is supported) and, below them, a vertically scrollable, responsive grid of the files selected so far — each cell showing a preview (image thumbnail, audio player, or a type icon for video/documents) with its file name.
+2. Files can be removed from the grid before sending. Limits (count and 45 MB per file) are enforced with plain-language errors.
+3. Selected files are attached to the next turn the student sends: photos/documents are shared with the tutor as part of that turn so the student can say "this question here" about their own material.
+
+### F-11 — Attempt-first tutoring
+1. When a student presents a problem, Texa does **not** solve it for them. It first asks the student to try it, or asks how they think it should be approached ("What do you think the first step could be?").
+2. Texa then assists only as needed: a hint, a pointed question, or one small step — escalating help only when the student is stuck, asks for more help, or has tried and missed.
+3. A full worked solution is given only when the student has genuinely attempted the problem or explicitly asks to be shown after trying.
+
+### F-12 — Session Observation
+1. Every session has a **Session Observation**: a note that starts blank and that the tutor progressively updates during the session as it notices things worth remembering — how the student's understanding or behaviour changes in specific situations, misconceptions that surface or clear, strategies that work for them.
+2. It contains only important observations (not a transcript or summary of everything said), is at most **two paragraphs**, and may legitimately stay empty when nothing noteworthy has been observed yet.
+3. The observations from the **last 3 sessions** are always given to the tutor at the start of a session, and the tutor can search older observations (by date, by content, or both) when it needs more history.
+
+### F-13 — Student Memory (cross-session)
+1. Separate from any single session, Texa keeps a **Memory** of the student: their level, goals, preferences, learning patterns, what helps them understand, and what tends to confuse them.
+2. Memory is concise and kept current — the tutor progressively revises it across sessions as things change, rather than appending endlessly.
+3. Memory is given to the tutor in every session so help is personalised from the first minute.
+
 ## 9. Functional Requirements
 
 Format: **ID — Requirement** *(acceptance criteria in italics)*.
@@ -229,6 +250,20 @@ Format: **ID — Requirement** *(acceptance criteria in italics)*.
 - **FR-AI-09** — When explaining on the board, the AI shall anchor before it draws: focus/point at the relevant existing element first, draw one step at a time in empty space near (not on top of) the relevant work, narrate while drawing, and periodically check understanding before continuing.
 - **FR-AI-10** — After an interruption, the AI shall either resume the suspended explanation from the interrupted step (without redrawing completed steps), answer the interrupting question and then offer/resume, or abandon it if the student changed topic. It shall not restart the whole explanation unprompted.
 
+
+### 9.5b File Uploads
+- **FR-UP-01** — Tapping the file control shall open a modal with the upload sources appropriate to the current platform and a vertically scrollable, responsive preview grid (preview + file name) of the selected files, from which files can be removed before sending.
+- **FR-UP-02** — Upload state shall be managed by the app itself with Flutter's built-in components only (no form-builder package), and selected files shall attach to the next student turn.
+
+### 9.5c Attempt-First Pedagogy
+- **FR-PED-01** — The tutor shall first invite an attempt or an approach ("How do you think we should start?") for any new problem, and shall assist with hints or single steps only as necessary. *It never opens by solving a problem the student has not tried.*
+- **FR-PED-02** — Help escalates with need: hint → guided step → worked step; a complete solution requires a genuine attempt or an explicit request after trying.
+
+### 9.5d Session Observation & Memory
+- **FR-OB-01** — Each session shall have a Session Observation, initially blank, progressively updated by the tutor via efficient text edits (see Tech Specs), containing only important observations, at most two paragraphs, and allowed to remain empty.
+- **FR-OB-02** — The last 3 sessions' observations shall always be included in the tutor's context, and the tutor shall be able to search observations by date, content, or a date-range-plus-content combination (full-text search for the MVP).
+- **FR-ME-01** — A single cross-session Memory (level, goals, preferences, learning patterns, what helps/confuses) shall be kept concise and progressively revised by the tutor, and shall be included in the tutor's context for every session.
+
 ### 9.6 Speech Output & Captions
 - **FR-SP-01** — All spoken text (plain replies and every `accompanying_speech`) shall be split into chunks at **full-stop sentence punctuation** (`.`, `!`, `?`) and synthesised chunk-by-chunk with Kokoro TTS (Tech Specs §9).
 - **FR-SP-02** — Chunks shall play sequentially without overlap; the next chunk is synthesised while the current chunk plays (prefetch depth 1).
@@ -261,7 +296,7 @@ Format: **ID — Requirement** *(acceptance criteria in italics)*.
 ## 11. Content & Tutor Behaviour (Product Level)
 
 - **Tone:** warm, patient, encouraging; addresses the student directly; never condescending. Age-appropriate for 11–18.
-- **Pedagogy:** guide before telling — ask a leading question or show one step, then check understanding. Never emit a full worked solution in one turn unless the student explicitly asks.
+- **Pedagogy (attempt-first):** never solve a problem the student has not tried. First ask them to attempt it or to say how they think it should be approached; then assist only as necessary — a hint, a leading question, or one step — escalating only when they are stuck or ask for more. Never emit a full worked solution in one turn unless the student has genuinely attempted the problem, or explicitly asks to be shown after trying.
 - **Modality discipline:** if a step is spatial (diagram, graph, molecule, circuit), it must be drawn; formulas must be written as LaTeX, not described in prose.
 - **Length:** spoken turns should be short (target ≤ ~45 seconds of speech per AI turn); prefer more, smaller exchanges.
 - Detailed prompt/system-instruction design is specified in Tech Specs §8.4.

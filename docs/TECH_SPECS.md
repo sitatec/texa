@@ -3,7 +3,7 @@
 | Field | Detail |
 |---|---|
 | Product | Texa — AI STEM Tutor |
-| Document version | 1.5 |
+| Document version | 1.6 |
 | Status | Draft for prototype (MVP) |
 | Version history | v1.1 (27 Oct 2026): fixed Meta AI base URL, per-session immutable model, confirmed encoder/endpoint media path, message-save ordering replacing mid-turn recovery |
 | Companion document | [Product Requirements Document](PRD.md) |
@@ -170,6 +170,15 @@ The model responds with either a plain text message (spoken, FR-AI-01) or an ord
 
 All coordinates are board logical units (§5.1), origin top-left. Every tool accepts optional `accompanying_speech` (string). The full JSON Schema for these tools is defined in the AI feature module and sent with every request; the system prompt (§8.4) is the model's contract for board size, ordering, and step granularity.
 
+
+**Student-knowledge tools** (never rendered on the board; executed by the app, results handled per §8.7):
+
+| Tool | Key parameters | App behaviour |
+|---|---|---|
+| `update_session_observation` | `edits` (list of `{old_text, new_text}`), `accompanying_speech?` | Applies the edits to this session's Session Observation with `applyEdits` (`features/ai/utils/file_edit.dart`), so repeated updates are cheap and surgical. Result is clamped to at most two paragraphs and persisted. If the observation is still blank, a single edit with empty `old_text` sets the initial content. |
+| `update_memory` | `edits` (list of `{old_text, new_text}`), `accompanying_speech?` | Same edit mechanism applied to the cross-session student Memory, keeping it concise and current rather than append-only. |
+| `search_session_observations` | `query?`, `from?`, `to?` (ISO dates) | Searches all past Session Observations (§8.7) and returns the matching dated excerpts to the model in a follow-up request within the same turn. |
+
 **Internal control tool** (never rendered on the board; executed by the playback engine):
 
 | Tool | Parameters | App behaviour |
@@ -270,7 +279,7 @@ for item in items:
 ### 8.4 System prompt design (v1 contract)
 The system prompt lives in one versioned file (`features/ai/system_prompt.dart`, `kSystemPromptVersion`) and MUST establish all of the following:
 
-1. **Role & pedagogy:** patient STEM tutor for ages 11–18; one step at a time; guide before telling; short spoken turns; check understanding regularly ("Does that step make sense before I go on?").
+1. **Role & pedagogy (attempt-first):** patient STEM tutor for ages 11–18. For any new problem, first ask the student to try it or to explain how they think it should be approached — never open by solving it. Then assist only as necessary: hint first, then a guided single step, escalating only when the student is stuck, has tried and missed, or asks for more help. One step at a time; short spoken turns; check understanding regularly ("Does that step make sense before I go on?"). A complete worked solution requires a genuine attempt or an explicit request after trying.
 2. **Board contract:** fixed 1200×1600 board, origin top-left; tool list and when each is used (formulas → `write_math`, diagrams → `draw_svg`, curves → `plot_function` only — never hand-plotted coordinates, references → `point_at`/`focus_viewport`); every drawn element gets a unique semantic `element_id`, later steps reference those IDs to point at, edit, or remove their own elements; never erase student work (no tool can address it).
 3. **Explanation etiquette on the board (FR-AI-09):**
    - Anchor first: `focus_viewport`/`point_at` the element being discussed *before* drawing anything new, so the student's eyes are in the right place.
@@ -315,6 +324,16 @@ Playback MUST be interruptible by voice at all times it is active. The mic/VAD p
 
 **Drawing-only interruption:** pen input suspends playback as above; no API turn is created until the student speaks (the drawings are simply present in the frames of that next turn) or taps stop (queue discarded).
 
+
+### 8.7 Session Observation, Memory & observation search
+- **Session Observation (per session):** a single short text, stored per session (`observations` collection: `sessionId`, `date`, `content`), starting blank. The tutor updates it progressively during a session with `update_session_observation`, whose `edits` are applied by `applyEdits` from `features/ai/utils/file_edit.dart` (exact-first/fuzzy matching, uniqueness and overlap validation) instead of rewriting the whole note each time. Content is limited to important observations about the student and is clamped to **at most two paragraphs**; an empty observation is valid and common early in a session.
+- **Student Memory (cross-session):** one concise text (`memory` key) covering level, goals, preferences, learning patterns, what helps and what confuses. Updated with `update_memory` through the same `applyEdits` mechanism and revised in place as things change — it is a living summary, not a log.
+- **Prompt injection:** every request's system context includes (a) the current Memory and (b) the observations of the **last 3 sessions** (by date, newest first, labelled with their dates). The current session's own observation is included as it develops.
+- **Search:** `search_session_observations` supports content (case-insensitive full-text contains — the MVP substitute for embeddings), a `from`/`to` date range, or both combined. Observations are held in tostore; if/when a store without full-text support is used, the same tool degrades to date/date-range filtering only. The tool is executed by the app as soon as its call completes; its results are then sent to the model in **one follow-up streaming request within the same turn** (text context only, no resent video), and the reply to that follow-up is what gets played. At most one such follow-up per turn.
+
+## 8.8 File uploads
+- The session composer uses `TexaInputFileWidget` (`features/session/input_file_widget/`). Its state is its own (`StatefulWidget` + `setState`/`ValueNotifier`, Flutter built-ins only — **no `flutter_form_builder`**). Tapping it opens a modal (`showModalBottomSheet`) whose upload options depend on the platform (gallery/camera/file picker on mobile, file picker on desktop/web, plus in-app audio recording when audio uploads are enabled), followed by a vertically scrollable responsive grid (`GridView` with a max-cross-axis-extent delegate) of selected files: preview (image bytes, audio playback control, or a type icon) plus file name, each removable. Selected files attach to the next student turn: images/documents are included with that turn so the tutor can see the student's own material; the 45 MB per-file limit and max-count are enforced before sending.
+
 ## 9. TTS — Sentence Chunking, Playback, Captions
 
 ### 9.1 Chunking rule (FR-SP-01)
@@ -347,6 +366,8 @@ A caption controller exposes `currentChunk: String?` (set on chunk playback star
 | `settings` (single row) | `apiKey`, `captionsDefault`, `micPermissionDenied` — no base URL (fixed constant) and no model (per-session) |
 | `sessions` | `id`, `title`, `subject?`, `model` (required, write-once — set at creation, never updated), `createdAt`, `updatedAt`, `thumbnailPath?` |
 | `board_snapshots` | `sessionId` (key), `elementsJson` (serialised board elements incl. image-element asset refs), `aiElementRegistryJson` (§6.5: element_id → type/rect/asset), `viewportJson` (transform), `updatedAt` |
+| `observations` | `sessionId`, `date`, `content` (Session Observation, ≤2 paragraphs; blank at session start) |
+| `memory` (single value) | concise cross-session student Memory text |
 | `messages` | `id`, `sessionId`, `role` (student/ai), `kind` (video-turn/text/actions), `payloadJson` (for AI: text + tool calls exactly as received; for student: local MP4 path until the turn completes, then null), `createdAt`. A student message row is inserted when the turn is sent; an AI message row is inserted when the response is received, before playback starts (§10.5) |
 
 Raster assets created by bake-in (SVG/LaTeX renders, thumbnails) are files under app documents dir, referenced by path from `elementsJson`; deleting a session deletes its files.

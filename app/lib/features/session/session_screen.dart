@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,6 +9,7 @@ import '../../core/theme.dart';
 import '../../generated/i18n/translations.g.dart';
 import '../board/board_models.dart';
 import '../board/board_widget.dart';
+import 'input_file_widget/input_file_widget.dart';
 import 'session_controller.dart';
 
 /// The board-first tutoring session screen.
@@ -27,6 +29,7 @@ class _SessionScreenState extends State<SessionScreen> {
   bool _strokeUndoPushed = false;
   bool _eraseUndoPushed = false;
   final TextEditingController _question = TextEditingController();
+  List<TexaLocalFile> _attachments = [];
   SessionController get c => widget.controller;
 
   @override
@@ -287,6 +290,11 @@ class _SessionScreenState extends State<SessionScreen> {
                       padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
                       child: Row(
                         children: [
+                          TexaInputFileWidget(
+                            initialValue: _attachments,
+                            onChanged: (files) =>
+                                setState(() => _attachments = files),
+                          ),
                           Expanded(
                             child: TextField(
                               controller: _question,
@@ -320,7 +328,53 @@ class _SessionScreenState extends State<SessionScreen> {
   void _ask() {
     final t = _question.text.trim();
     _question.clear();
-    unawaited(c.askTexa(t));
+    final files = _attachments;
+    setState(() => _attachments = []);
+    unawaited(_askWithFiles(t, files));
+  }
+
+  Future<void> _askWithFiles(String t, List<TexaLocalFile> files) async {
+    final uploads =
+        <({String name, String mimeType, String? base64, String? text})>[];
+    for (final f in files) {
+      final mime = f.mimeType;
+      final isText =
+          mime.startsWith('text/') ||
+          mime == 'application/json' ||
+          f.data.name.toLowerCase().endsWith('.md');
+      try {
+        if (isText) {
+          uploads.add((
+            name: f.data.name,
+            mimeType: mime,
+            base64: null,
+            text: utf8.decode(await f.data.readAsBytes(), allowMalformed: true),
+          ));
+        } else if (mime.startsWith('image/')) {
+          uploads.add((
+            name: f.data.name,
+            mimeType: mime,
+            base64: base64Encode(await f.data.readAsBytes()),
+            text: null,
+          ));
+        } else {
+          uploads.add((
+            name: f.data.name,
+            mimeType: mime,
+            base64: null,
+            text: null,
+          ));
+        }
+      } catch (_) {
+        uploads.add((
+          name: f.data.name,
+          mimeType: mime,
+          base64: null,
+          text: null,
+        ));
+      }
+    }
+    await c.askTexa(t, uploads: uploads);
   }
 
   Widget _hintCard(String text) => Material(

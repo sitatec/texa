@@ -92,9 +92,35 @@ class AiClient {
     Map<String, dynamic>? interruptionContext,
     String? subject,
     required bool stream,
+    String studentMemory = '',
+    List<SessionObservation> recentObservations = const [],
+    String currentObservation = '',
+    List<({String name, String mimeType, String? base64, String? text})>
+        uploads =
+        const [],
+    String? extraContext,
   }) {
+    final system = StringBuffer(kSystemPrompt);
+    if (studentMemory.trim().isNotEmpty) {
+      system.write(
+        '\n\nWhat you remember about this student: ${studentMemory.trim()}',
+      );
+    }
+    if (recentObservations.isNotEmpty) {
+      system.write('\n\nObservations from recent sessions (newest first):');
+      for (final o in recentObservations) {
+        system.write(
+          '\n[${o.date.toIso8601String().substring(0, 10)}] ${o.content}',
+        );
+      }
+    }
+    if (currentObservation.trim().isNotEmpty) {
+      system.write(
+        '\n\nThis session\'s observation so far: ${currentObservation.trim()}',
+      );
+    }
     final messages = <Map<String, dynamic>>[
-      {'role': 'system', 'content': kSystemPrompt},
+      {'role': 'system', 'content': system.toString()},
     ];
     for (final m in history) {
       if (m.role == 'ai') {
@@ -136,8 +162,30 @@ class AiClient {
     if (typedText != null && typedText.isNotEmpty) {
       context.write(' The student typed: $typedText');
     }
+    if (extraContext != null && extraContext.isNotEmpty) {
+      context.write(' $extraContext');
+    }
+    for (final u in uploads) {
+      if (u.text != null && u.text!.isNotEmpty) {
+        context.write(
+          '\nThe student uploaded a file named ${u.name}:\n${u.text}',
+        );
+      } else if (u.base64 == null) {
+        context.write(
+          '\nThe student attached a file named ${u.name} (${u.mimeType}).',
+        );
+      }
+    }
     final content = <Map<String, dynamic>>[
       {'type': 'text', 'text': context.toString()},
+      ...uploads
+          .where((u) => u.base64 != null)
+          .map(
+            (u) => {
+              'type': 'image_url',
+              'image_url': {'url': 'data:${u.mimeType};base64,${u.base64}'},
+            },
+          ),
       if (videoBase64 != null)
         {
           'type': 'video_url',
@@ -164,6 +212,13 @@ class AiClient {
     String? typedText,
     Map<String, dynamic>? interruptionContext,
     String? subject,
+    String studentMemory = '',
+    List<SessionObservation> recentObservations = const [],
+    String currentObservation = '',
+    List<({String name, String mimeType, String? base64, String? text})>
+        uploads =
+        const [],
+    String? extraContext,
   }) async* {
     final request =
         http.Request('POST', Uri.parse('$apiBaseUrl/chat/completions'))
@@ -178,6 +233,11 @@ class AiClient {
               interruptionContext: interruptionContext,
               subject: subject,
               stream: true,
+              studentMemory: studentMemory,
+              recentObservations: recentObservations,
+              currentObservation: currentObservation,
+              uploads: uploads,
+              extraContext: extraContext,
             ),
           );
     http.StreamedResponse response;

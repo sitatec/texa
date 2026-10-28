@@ -21,6 +21,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _key = TextEditingController(
     text: widget.app.settings.apiKey,
   );
+  late final TextEditingController _memory = TextEditingController(
+    text: widget.app.memoryText,
+  );
   bool _testing = false;
   String? _message;
   String _logs = '';
@@ -38,6 +41,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     _key.dispose();
+    _memory.dispose();
     super.dispose();
   }
 
@@ -101,6 +105,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
               );
               setState(() {});
             },
+          ),
+          const Divider(height: 36),
+          Text(
+            tr.settings.memorySection,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          Text(tr.settings.memoryDescription),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _memory,
+            minLines: 3,
+            maxLines: 8,
+            decoration: InputDecoration(
+              labelText: tr.settings.memoryLabel,
+              hintText: tr.settings.memoryHint,
+              border: const OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton.icon(
+              onPressed: _saveMemory,
+              icon: const Icon(Icons.save_outlined),
+              label: Text(tr.common.save),
+            ),
           ),
           const Divider(height: 36),
           Text(
@@ -173,6 +204,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
         setupComplete: _key.text.trim().isNotEmpty,
       ),
     );
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(tr.settings.saved)));
+    }
+  }
+
+  Future<void> _saveMemory() async {
+    await widget.app.saveMemory(_memory.text.trim());
     if (mounted) {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(tr.settings.saved)));

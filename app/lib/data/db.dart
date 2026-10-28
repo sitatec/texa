@@ -105,6 +105,55 @@ class AppDb {
     await put('sessions', '[]');
   }
 
+  Future<String> loadMemory() async => await get('memory') ?? '';
+  Future<void> saveMemory(String text) => put('memory', text);
+  Future<List<SessionObservation>> loadObservations() async {
+    final raw = await get('observations');
+    if (raw == null) return [];
+    try {
+      return (jsonDecode(raw) as List)
+          .map((e) => SessionObservation.fromJson(e as Map<String, dynamic>))
+          .toList()
+        ..sort((a, b) => b.date.compareTo(a.date));
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> saveObservation(String sessionId, String content) async {
+    final all = await loadObservations();
+    all.removeWhere((e) => e.sessionId == sessionId);
+    if (content.trim().isNotEmpty) {
+      all.add(
+        SessionObservation(
+          sessionId: sessionId,
+          date: DateTime.now(),
+          content: content,
+        ),
+      );
+    }
+    await put('observations', jsonEncode(all.map((e) => e.toJson()).toList()));
+  }
+
+  /// Full-text (contains) + date-range search over session observations.
+  /// The MVP substitute for embedding search; date-only filtering is the
+  /// guaranteed baseline if text matching finds nothing.
+  List<SessionObservation> searchObservations(
+    List<SessionObservation> all, {
+    String? query,
+    DateTime? from,
+    DateTime? to,
+  }) {
+    return all.where((o) {
+      if (from != null && o.date.isBefore(from)) return false;
+      if (to != null && o.date.isAfter(to)) return false;
+      if (query != null && query.trim().isNotEmpty) {
+        return o.content.toLowerCase().contains(query.trim().toLowerCase());
+      }
+      return true;
+    }).toList();
+  }
+
   Future<void> appendLog(String line) async {
     final s = await get('logs') ?? '';
     final lines = (s.isEmpty ? <String>[] : s.split('\n'))

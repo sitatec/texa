@@ -14,9 +14,11 @@ class AppController extends ChangeNotifier {
   AppSettings settings = const AppSettings();
   List<Session> sessions = [];
   bool speechReady = false;
+  String memoryText = '';
 
   Future<void> init() async {
     settings = await db.loadSettings();
+    memoryText = await db.loadMemory();
     sessions = await db.loadSessions();
     await tryInitSpeech();
   }
@@ -41,6 +43,12 @@ class AppController extends ChangeNotifier {
     } catch (_) {
       return null;
     }
+  }
+
+  Future<void> saveMemory(String text) async {
+    memoryText = text;
+    await db.saveMemory(text);
+    notifyListeners();
   }
 
   Future<void> saveSettings(AppSettings s) async {
