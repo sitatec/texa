@@ -1,0 +1,4 @@
+[submodule "app/sherpa-onnx"]
+	path = app/sherpa-onnx
+	url = https://github.com/sitatec/sherpa-onnx
+	branch = smart-turn
