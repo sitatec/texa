@@ -11,8 +11,7 @@ import 'package:slang/generated.dart';
 import 'translations.g.dart';
 
 // Path: <root>
-class TranslationsFr extends Translations
-    with BaseTranslations<AppLocale, Translations> {
+class TranslationsFr extends Translations with BaseTranslations<AppLocale, Translations> {
   /// You can call this constructor and build your own translation instance of this locale.
   /// Constructing via the enum [AppLocale.build] is preferred.
   TranslationsFr({
@@ -20,10 +19,7 @@ class TranslationsFr extends Translations
     PluralResolver? cardinalResolver,
     PluralResolver? ordinalResolver,
     TranslationMetadata<AppLocale, Translations>? meta,
-  }) : assert(
-         overrides == null,
-         'Set "translation_overrides: true" in order to enable this feature.',
-       ),
+  }) : assert(overrides == null, 'Set "translation_overrides: true" in order to enable this feature.'),
        _meta =
            meta ??
            TranslationMetadata(
@@ -32,10 +28,7 @@ class TranslationsFr extends Translations
              cardinalResolver: cardinalResolver,
              ordinalResolver: ordinalResolver,
            ),
-       super(
-         cardinalResolver: cardinalResolver,
-         ordinalResolver: ordinalResolver,
-       ) {
+       super(cardinalResolver: cardinalResolver, ordinalResolver: ordinalResolver) {
     _meta.setFlatMapFunction(_flatMapFunction);
   }
 
@@ -51,9 +44,8 @@ class TranslationsFr extends Translations
   late final TranslationsFr _root = this; // ignore: unused_field
 
   @override
-  TranslationsFr $copyWith({
-    TranslationMetadata<AppLocale, Translations>? meta,
-  }) => TranslationsFr(meta: meta ?? this.$meta);
+  TranslationsFr $copyWith({TranslationMetadata<AppLocale, Translations>? meta}) =>
+      TranslationsFr(meta: meta ?? this.$meta);
 
   // Translations
 }

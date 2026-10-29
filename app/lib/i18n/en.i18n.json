@@ -6,6 +6,10 @@
     }
   },
   "common": {
+    "gotIt": "Got it",
+    "@gotIt": {
+      "description": "Button dismissing an informational notice."
+    },
     "cancel": "Cancel",
     "@cancel": {
       "description": "Cancel button in dialogs."
@@ -60,7 +64,7 @@
     "@welcomeBody": {
       "description": "Explanation on the welcome screen."
     },
-    "privacyNote": "Your board and voice are sent to Meta AI so the tutor can see and hear your work. Nothing is sent to Texa servers — there are none.",
+    "privacyNote": "Texa's AI Agent is powered by the Meta AI models. Provide your valid Meta AI API Kay to continue.",
     "@privacyNote": {
       "description": "Privacy note in setup and Settings."
     },
@@ -71,6 +75,10 @@
     "apiKeyHint": "Paste your API key",
     "@apiKeyHint": {
       "description": "Placeholder in the API key field."
+    },
+    "apiKeySecureNote": "Your key is stored securely on this device and never leaves it except to call Meta AI.",
+    "@apiKeySecureNote": {
+      "description": "Note under the API key field explaining secure on-device storage."
     },
     "testConnection": "Test connection",
     "@testConnection": {
@@ -87,22 +95,6 @@
     "connectionFailed": "That key did not work. Check it and try again.",
     "@connectionFailed": {
       "description": "Error after a failed connection test."
-    },
-    "micTitle": "Talk while you draw",
-    "@micTitle": {
-      "description": "Heading for the microphone permission step."
-    },
-    "micBody": "Texa listens so you can explain your thinking out loud. You can use Texa without the microphone, drawing and typing instead.",
-    "@micBody": {
-      "description": "Explanation for microphone permission."
-    },
-    "allowMic": "Allow microphone",
-    "@allowMic": {
-      "description": "Button requesting microphone permission."
-    },
-    "skipMic": "Continue without microphone",
-    "@skipMic": {
-      "description": "Button to continue without microphone permission."
     },
     "modelsTitle": "Setting up speech",
     "@modelsTitle": {
@@ -170,17 +162,49 @@
     "@chooseModelBody": {
       "description": "Explanation in the model picker."
     },
+    "customModel": "Custom",
+    "@customModel": {
+      "description": "Model dropdown option that reveals a free-text model name field."
+    },
     "modelNameLabel": "Model name",
     "@modelNameLabel": {
       "description": "Text field for typing a model name in the picker."
     },
-    "loadModels": "Load available models",
-    "@loadModels": {
-      "description": "Button that fetches the model list from the API."
-    },
     "createSession": "Create session",
     "@createSession": {
       "description": "Confirm button in the model picker."
+    },
+    "reasoningLabel": "Reasoning effort",
+    "@reasoningLabel": {
+      "description": "Label for the reasoning-effort dropdown in the new-session dialog."
+    },
+    "reasoningNone": "None (model default)",
+    "@reasoningNone": {
+      "description": "Reasoning effort: do not send a reasoning parameter."
+    },
+    "reasoningMinimal": "Minimal",
+    "@reasoningMinimal": {
+      "description": "Reasoning effort option: minimal."
+    },
+    "reasoningLow": "Low",
+    "@reasoningLow": {
+      "description": "Reasoning effort option: low."
+    },
+    "reasoningMedium": "Medium",
+    "@reasoningMedium": {
+      "description": "Reasoning effort option: medium."
+    },
+    "reasoningHigh": "High",
+    "@reasoningHigh": {
+      "description": "Reasoning effort option: high."
+    },
+    "reasoningXHigh": "Extra high",
+    "@reasoningXHigh": {
+      "description": "Reasoning effort option: xhigh."
+    },
+    "reasoningChip": "Reasoning: {effort}",
+    "@reasoningChip": {
+      "description": "Home session card chip showing the session reasoning effort."
     }
   },
   "session": {
@@ -204,21 +228,21 @@
     "@muted": {
       "description": "Status pill when the microphone is muted."
     },
-    "drawOnlyHint": "Draw-only mode — type your question below, or enable the microphone in Settings.",
+    "headphonesTitle": "Headphones needed on Mac",
+    "@headphonesTitle": {
+      "description": "Title of the macOS headphones notice shown when a session starts."
+    },
+    "headphonesBody": "In this version, macOS can't stop Texa from hearing its own voice through your speakers, so it would hear itself and get stuck in a loop. Please use headphones for voice sessions on Mac.",
+    "@headphonesBody": {
+      "description": "Body of the macOS headphones notice shown when a session starts."
+    },
+    "drawOnlyHint": "Draw-only mode — draw on the board or attach a file, or enable the microphone in Settings.",
     "@drawOnlyHint": {
       "description": "Hint shown when microphone permission was denied."
     },
     "listenHint": "I'm listening — tell me what you're doing",
     "@listenHint": {
       "description": "Hint encouraging the student to speak while drawing."
-    },
-    "askTexa": "Ask Texa",
-    "@askTexa": {
-      "description": "Button that sends the current board and typed question to the tutor."
-    },
-    "typeQuestion": "Type your question (optional)…",
-    "@typeQuestion": {
-      "description": "Placeholder for the typed question field."
     },
     "stop": "Stop",
     "@stop": {
@@ -228,9 +252,25 @@
     "@pen": {
       "description": "Pen tool tooltip."
     },
+    "lineTool": "Straight line",
+    "@lineTool": {
+      "description": "Tooltip for the straight-line drawing tool."
+    },
+    "penColor": "Pen colour",
+    "@penColor": {
+      "description": "Tooltip for the pen colour picker button."
+    },
     "eraser": "Eraser",
     "@eraser": {
       "description": "Eraser tool tooltip."
+    },
+    "strokeWidth": "Stroke width",
+    "@strokeWidth": {
+      "description": "Toolbar slider tooltip: width of pen and straight-line strokes."
+    },
+    "eraserWidth": "Eraser width",
+    "@eraserWidth": {
+      "description": "Toolbar slider tooltip: eraser size."
     },
     "undo": "Undo",
     "@undo": {
@@ -275,10 +315,6 @@
     "more": "More options",
     "@more": {
       "description": "More button tooltip on compact layouts."
-    },
-    "subject": "Subject",
-    "@subject": {
-      "description": "Label for the optional subject selector."
     },
     "retryTurn": "Retry turn",
     "@retryTurn": {

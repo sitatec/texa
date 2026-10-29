@@ -19,7 +19,7 @@ class App extends StatelessWidget {
         title: tr.app.title,
         debugShowCheckedModeBanner: false,
         theme: lightTheme,
-        darkTheme: darkTheme,
+        // darkTheme: darkTheme,
         localizationsDelegates: const [
           ...GlobalMaterialLocalizations.delegates,
         ],

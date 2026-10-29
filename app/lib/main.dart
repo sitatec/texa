@@ -5,12 +5,13 @@ import 'package:flutter/material.dart';
 
 import 'app.dart';
 import 'app_controller.dart';
-import 'data/db.dart';
+import 'core/data/db.dart';
 import 'generated/i18n/translations.g.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  LocaleSettings.useDeviceLocale();
+  // LocaleSettings.useDeviceLocale();
+  LocaleSettings.setLocale(.en);
   final db = await AppDb.open();
   final controller = AppController(db);
   await controller.init();

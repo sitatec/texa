@@ -8,7 +8,6 @@ const texaYellow = Color(0xFFFBBF24);
 final _primaryColor = texaBlue;
 
 final _defaultButtonStyle = ButtonStyle(
-  visualDensity: .standard,
   shape: WidgetStatePropertyAll(
     RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
   ),
@@ -21,7 +20,6 @@ final _filledButtonStyle = _defaultButtonStyle.copyWith(
   }),
 );
 final _iconButtonStyle = _defaultButtonStyle.copyWith(
-  visualDensity: .standard,
   shape: WidgetStatePropertyAll(
     RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
   ),

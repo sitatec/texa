@@ -1,16 +1,16 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:texa/features/ai/ai_actions.dart';
-import 'package:texa/features/board/board_models.dart';
+import 'package:texa/features/study_session/ai/ai_actions.dart';
+import 'package:texa/features/study_session/board/board_models.dart';
 import 'package:flutter/material.dart';
-import 'package:texa/features/board/plotter.dart';
-import 'package:texa/features/playback/playback_engine.dart';
-import 'package:texa/features/playback/speech_chunker.dart';
-import 'package:texa/features/playback/wav_builder.dart';
-import 'package:texa/data/db.dart';
-import 'package:texa/data/models.dart';
-import 'package:texa/features/ai/utils/file_edit.dart';
+import 'package:texa/features/study_session/board/plotter.dart';
+import 'package:texa/features/study_session/playback/playback_engine.dart';
+import 'package:texa/features/study_session/playback/speech_chunker.dart';
+import 'package:texa/features/study_session/playback/wav_builder.dart';
+import 'package:texa/core/data/db.dart';
+import 'package:texa/core/data/models.dart';
+import 'package:texa/features/study_session/ai/utils/file_edit.dart';
 
 void main() {
   test('streaming splitter emits only at sentence endpoints', () {
@@ -123,4 +123,47 @@ void main() {
     );
     expect(db.searchObservations(all, query: 'nothing').isEmpty, isTrue);
   });
+
+  test(
+    'table-backed store round-trips sessions, messages, observations',
+    () async {
+      final db = AppDb.memory();
+      final session = Session(
+        id: 's1',
+        title: 'Fractions',
+        model: 'm1',
+        createdAt: DateTime(2026, 1, 1),
+        updatedAt: DateTime(2026, 1, 2),
+      );
+      await db.saveSessions([session]);
+      expect((await db.loadSessions()).single.title, 'Fractions');
+      await db.saveBoard('s1', '{"elements":[]}');
+      expect(await db.loadBoard('s1'), '{"elements":[]}');
+      await db.saveMessages('s1', [
+        ChatMessage(
+          id: 'msg1',
+          sessionId: 's1',
+          role: 'ai',
+          kind: 'text',
+          payloadJson: '{"text":"hi"}',
+          createdAt: DateTime(2026, 1, 2),
+        ),
+      ]);
+      expect((await db.loadMessages('s1')).single.payload['text'], 'hi');
+      await db.saveObservation('s1', 'Getting confident.');
+      expect(
+        (await db.loadObservations()).single.content,
+        'Getting confident.',
+      );
+      await db.saveSettings(
+        const AppSettings(apiKey: 'secret', captionsDefault: false),
+      );
+      final settings = await db.loadSettings();
+      expect(settings.apiKey, 'secret');
+      expect(settings.captionsDefault, isFalse);
+      await db.deleteSession('s1');
+      expect(await db.loadSessions(), isEmpty);
+      expect(await db.loadBoard('s1'), isNull);
+    },
+  );
 }

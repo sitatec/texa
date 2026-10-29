@@ -2,15 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../../app_controller.dart';
-import '../../core/errors.dart';
 import '../../core/theme.dart';
-import '../../data/models.dart';
+import '../../core/data/models.dart';
 import '../../generated/i18n/translations.g.dart';
-import '../ai/ai_client.dart';
-import '../session/session_controller.dart';
-import '../session/session_screen.dart';
+import '../study_session/session_controller.dart';
+import '../study_session/session_screen.dart';
 import '../settings/settings_screen.dart';
 
 /// Home: session history plus the single New Session action.
@@ -19,6 +18,7 @@ class HomeScreen extends StatelessWidget {
   final AppController app;
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return ListenableBuilder(
       listenable: app,
       builder: (context, _) => Scaffold(
@@ -27,7 +27,7 @@ class HomeScreen extends StatelessWidget {
           actions: [
             IconButton(
               tooltip: tr.home.settings,
-              icon: const Icon(Icons.settings_outlined),
+              icon: const Icon(Symbols.settings),
               onPressed: () async {
                 await Navigator.push(
                   context,
@@ -38,113 +38,121 @@ class HomeScreen extends StatelessWidget {
           ],
         ),
         floatingActionButton: FloatingActionButton.extended(
+          backgroundColor: theme.colorScheme.primary,
+          foregroundColor: theme.colorScheme.onPrimary,
           onPressed: () => _newSession(context),
-          icon: const Icon(Icons.add),
+          icon: const Icon(Symbols.add),
           label: Text(tr.home.newSession),
         ),
         body: app.sessions.isEmpty
             ? Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(32),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.school_outlined,
-                        size: 72,
-                        color: texaBlue,
-                      ),
-                      const SizedBox(height: 20),
-                      Text(
-                        tr.home.emptyTitle,
-                        style: Theme.of(context).textTheme.headlineSmall,
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 10),
-                      Text(tr.home.emptyBody, textAlign: TextAlign.center),
-                      const SizedBox(height: 24),
-                      FilledButton.icon(
-                        onPressed: () => _newSession(context),
-                        icon: const Icon(Icons.add),
-                        label: Text(tr.home.newSession),
-                      ),
-                    ],
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: 900),
+                  child: Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Symbols.school, size: 72, color: texaBlue),
+                        const SizedBox(height: 20),
+                        Text(
+                          tr.home.emptyTitle,
+                          style: Theme.of(context).textTheme.headlineSmall,
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 10),
+                        Text(tr.home.emptyBody, textAlign: TextAlign.center),
+                        const SizedBox(height: 24),
+                        FilledButton.icon(
+                          onPressed: () => _newSession(context),
+                          icon: const Icon(Symbols.add),
+                          label: Text(tr.home.newSession),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               )
-            : ListView.separated(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
-                itemCount: app.sessions.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 12),
-                itemBuilder: (context, i) {
-                  final s = app.sessions[i];
-                  return Card(
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.all(14),
-                      leading: s.thumbnailBase64 == null
-                          ? const CircleAvatar(child: Icon(Icons.draw_outlined))
-                          : ClipRRect(
-                              borderRadius: BorderRadius.circular(10),
-                              child: Image.memory(
-                                base64Decode(s.thumbnailBase64!),
-                                width: 52,
-                                height: 68,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, _, _) => const CircleAvatar(
-                                  child: Icon(Icons.draw_outlined),
+            : Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: 900),
+                  child: ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+                    itemCount: app.sessions.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 12),
+                    itemBuilder: (context, i) {
+                      final s = app.sessions[i];
+                      return Card(
+                        child: ListTile(
+                          leading: s.thumbnailBase64 == null
+                              ? const CircleAvatar(child: Icon(Symbols.draw))
+                              : ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Image.memory(
+                                    base64Decode(s.thumbnailBase64!),
+                                    width: 52,
+                                    height: 68,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, _, _) =>
+                                        const CircleAvatar(
+                                          child: Icon(Symbols.draw),
+                                        ),
+                                  ),
                                 ),
+                          title: Text(
+                            s.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Wrap(
+                            spacing: 6,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              Chip(
+                                label: Text(
+                                  s.model,
+                                  style: const TextStyle(fontSize: 11),
+                                ),
+                                visualDensity: VisualDensity.compact,
                               ),
-                            ),
-                      title: Text(
-                        s.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      subtitle: Wrap(
-                        spacing: 6,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          if (s.subject != null)
-                            Chip(
-                              label: Text(
-                                s.subject!,
-                                style: const TextStyle(fontSize: 11),
+                              if (s.reasoningEffort != null)
+                                Chip(
+                                  label: Text(
+                                    tr.home.reasoningChip(
+                                      effort: s.reasoningEffort!,
+                                    ),
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                              Text(relativeTime(s.updatedAt)),
+                            ],
+                          ),
+                          trailing: PopupMenuButton<String>(
+                            onSelected: (v) {
+                              if (v == 'rename') {
+                                _rename(context, s);
+                              } else if (v == 'delete') {
+                                _delete(context, s);
+                              }
+                            },
+                            itemBuilder: (_) => [
+                              PopupMenuItem(
+                                value: 'rename',
+                                child: Text(tr.common.rename),
                               ),
-                              visualDensity: VisualDensity.compact,
-                            ),
-                          Chip(
-                            label: Text(
-                              s.model,
-                              style: const TextStyle(fontSize: 11),
-                            ),
-                            visualDensity: VisualDensity.compact,
+                              PopupMenuItem(
+                                value: 'delete',
+                                child: Text(tr.common.delete),
+                              ),
+                            ],
                           ),
-                          Text(relativeTime(s.updatedAt)),
-                        ],
-                      ),
-                      trailing: PopupMenuButton<String>(
-                        onSelected: (v) {
-                          if (v == 'rename') {
-                            _rename(context, s);
-                          } else if (v == 'delete') {
-                            _delete(context, s);
-                          }
-                        },
-                        itemBuilder: (_) => [
-                          PopupMenuItem(
-                            value: 'rename',
-                            child: Text(tr.common.rename),
-                          ),
-                          PopupMenuItem(
-                            value: 'delete',
-                            child: Text(tr.common.delete),
-                          ),
-                        ],
-                      ),
-                      onTap: () => unawaited(_open(context, s)),
-                    ),
-                  );
-                },
+                          onTap: () => unawaited(_open(context, s)),
+                        ),
+                      );
+                    },
+                  ),
+                ),
               ),
       ),
     );
@@ -218,10 +226,17 @@ class HomeScreen extends StatelessWidget {
 
   Future<void> _newSession(BuildContext context) async {
     final modelCtrl = TextEditingController();
-    List<String> models = [];
-    String? selected;
-    String? loadError;
-    bool loading = false;
+    // Curated chat models, plus Custom for anything else. The full
+    // /models list also contains non-chat models, so it is not offered.
+    const customModel = '__custom';
+    const modelOptions = [
+      'muse-wonder-1.0',
+      'muse-spark-1.3',
+      'muse-spark-1.3-contributor',
+      customModel,
+    ];
+    var selection = modelOptions.first;
+    var reasoning = 'medium';
     final created = await showDialog<Session>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -235,64 +250,70 @@ class HomeScreen extends StatelessWidget {
               children: [
                 Text(tr.home.chooseModelBody),
                 const SizedBox(height: 14),
-                if (models.isNotEmpty)
-                  DropdownButtonFormField<String>(
-                    initialValue: selected,
-                    decoration: InputDecoration(
-                      labelText: tr.home.modelNameLabel,
-                    ),
-                    items: models
-                        .map(
-                          (m) => DropdownMenuItem(
-                            value: m,
-                            child: Text(m, overflow: TextOverflow.ellipsis),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (v) => setState(() {
-                      selected = v;
-                      modelCtrl.text = v ?? '';
-                    }),
-                  ),
-                TextField(
-                  controller: modelCtrl,
+                DropdownButtonFormField<String>(
+                  initialValue: selection,
                   decoration: InputDecoration(
                     labelText: tr.home.modelNameLabel,
-                    hintText: 'e.g. meta-ai-model',
                   ),
-                  onChanged: (_) => setState(() {}),
+                  items: modelOptions
+                      .map(
+                        (m) => DropdownMenuItem(
+                          value: m,
+                          child: Text(
+                            m == customModel ? tr.home.customModel : m,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) =>
+                      setState(() => selection = v ?? modelOptions.first),
                 ),
-                if (loadError != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      loadError!,
-                      style: const TextStyle(color: texaRed),
+                if (selection == customModel) ...[
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: modelCtrl,
+                    autofocus: true,
+                    decoration: InputDecoration(
+                      labelText: tr.home.modelNameLabel,
+                      hintText: 'e.g. meta-ai-model',
                     ),
+                    onChanged: (_) => setState(() {}),
                   ),
-                const SizedBox(height: 10),
-                OutlinedButton.icon(
-                  onPressed: loading
-                      ? null
-                      : () async {
-                          setState(() {
-                            loading = true;
-                            loadError = null;
-                          });
-                          try {
-                            models = await AiClient(app.settings.apiKey)
-                                .listModels();
-                            selected = models.isEmpty ? null : models.first;
-                            modelCtrl.text = selected ?? '';
-                          } on AppError catch (e) {
-                            loadError = e.message;
-                          } catch (e) {
-                            loadError = e.toString();
-                          }
-                          setState(() => loading = false);
-                        },
-                  icon: const Icon(Icons.cloud_download_outlined),
-                  label: Text(loading ? tr.setup.testing : tr.home.loadModels),
+                ],
+                const SizedBox(height: 14),
+                DropdownButtonFormField<String>(
+                  initialValue: reasoning,
+                  decoration: InputDecoration(
+                    labelText: tr.home.reasoningLabel,
+                  ),
+                  items: [
+                    DropdownMenuItem(
+                      value: 'none',
+                      child: Text(tr.home.reasoningNone),
+                    ),
+                    DropdownMenuItem(
+                      value: 'minimal',
+                      child: Text(tr.home.reasoningMinimal),
+                    ),
+                    DropdownMenuItem(
+                      value: 'low',
+                      child: Text(tr.home.reasoningLow),
+                    ),
+                    DropdownMenuItem(
+                      value: 'medium',
+                      child: Text(tr.home.reasoningMedium),
+                    ),
+                    DropdownMenuItem(
+                      value: 'high',
+                      child: Text(tr.home.reasoningHigh),
+                    ),
+                    DropdownMenuItem(
+                      value: 'xhigh',
+                      child: Text(tr.home.reasoningXHigh),
+                    ),
+                  ],
+                  onChanged: (v) => setState(() => reasoning = v ?? 'none'),
                 ),
               ],
             ),
@@ -303,10 +324,16 @@ class HomeScreen extends StatelessWidget {
               child: Text(tr.common.cancel),
             ),
             FilledButton(
-              onPressed: modelCtrl.text.trim().isEmpty
+              onPressed:
+                  selection == customModel && modelCtrl.text.trim().isEmpty
                   ? null
                   : () async {
-                      final s = await app.createSession(modelCtrl.text.trim());
+                      final s = await app.createSession(
+                        selection == customModel
+                            ? modelCtrl.text.trim()
+                            : selection,
+                        reasoningEffort: reasoning == 'none' ? null : reasoning,
+                      );
                       if (context.mounted) Navigator.pop(context, s);
                     },
               child: Text(tr.home.createSession),

@@ -1,13 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:record/record.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../../app_controller.dart';
 import '../../core/errors.dart';
 import '../../core/theme.dart';
 import '../../generated/i18n/translations.g.dart';
-import '../ai/ai_client.dart';
+import '../study_session/ai/ai_client.dart';
 
 /// First launch: API key, microphone permission, then speech provisioning.
 class SetupScreen extends StatefulWidget {
@@ -52,7 +52,7 @@ class _SetupScreenState extends State<SetupScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(Icons.school_outlined, size: 64, color: texaBlue),
+                  const Icon(Symbols.school, size: 64, color: texaBlue),
                   const SizedBox(height: 18),
                   Text(
                     tr.setup.welcomeTitle,
@@ -62,28 +62,29 @@ class _SetupScreenState extends State<SetupScreen> {
                   const SizedBox(height: 10),
                   Text(tr.setup.welcomeBody, textAlign: TextAlign.center),
                   const SizedBox(height: 14),
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEFF6FF),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.privacy_tip_outlined, color: texaBlue),
-                        const SizedBox(width: 10),
-                        Expanded(child: Text(tr.setup.privacyNote)),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 26),
                   if (_step == 0) ...[
+                    Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEFF6FF),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Symbols.privacy_tip, color: texaBlue),
+                          const SizedBox(width: 10),
+                          Expanded(child: Text(tr.setup.privacyNote)),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 26),
                     TextField(
                       controller: _key,
                       obscureText: true,
                       decoration: InputDecoration(
                         labelText: tr.setup.apiKeyLabel,
                         hintText: tr.setup.apiKeyHint,
+                        helperText: tr.setup.apiKeySecureNote,
                         border: const OutlineInputBorder(),
                       ),
                       onChanged: (_) => setState(() => _keyOk = false),
@@ -101,7 +102,7 @@ class _SetupScreenState extends State<SetupScreen> {
                       onPressed: _testing || _key.text.trim().isEmpty
                           ? null
                           : _test,
-                      icon: const Icon(Icons.wifi_tethering),
+                      icon: const Icon(Symbols.wifi_tethering),
                       label: Text(
                         _testing ? tr.setup.testing : tr.setup.testConnection,
                       ),
@@ -120,37 +121,15 @@ class _SetupScreenState extends State<SetupScreen> {
                     const SizedBox(height: 10),
                     FilledButton(
                       onPressed: _keyOk
-                          ? () => setState(() => _step = 1)
+                          ? () {
+                              setState(() => _step = 1);
+                              unawaited(_provision());
+                            }
                           : null,
                       child: Text(tr.common.kContinue),
                     ),
-                  ] else if (_step == 1) ...[
-                    Text(
-                      tr.setup.micTitle,
-                      style: Theme.of(context).textTheme.titleLarge,
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(tr.setup.micBody, textAlign: TextAlign.center),
-                    const SizedBox(height: 18),
-                    FilledButton.icon(
-                      onPressed: _requestMic,
-                      icon: const Icon(Icons.mic),
-                      label: Text(tr.setup.allowMic),
-                    ),
-                    TextButton(
-                      onPressed: () async {
-                        await widget.app.saveSettings(
-                          widget.app.settings.copyWith(
-                            micPermissionDenied: true,
-                          ),
-                        );
-                        setState(() => _step = 2);
-                        unawaited(_provision());
-                      },
-                      child: Text(tr.setup.skipMic),
-                    ),
                   ] else ...[
+                    const SizedBox(height: 24),
                     Text(
                       tr.setup.modelsTitle,
                       style: Theme.of(context).textTheme.titleLarge,
@@ -179,7 +158,7 @@ class _SetupScreenState extends State<SetupScreen> {
                       const SizedBox(height: 12),
                       FilledButton.icon(
                         onPressed: () => unawaited(_provision()),
-                        icon: const Icon(Icons.refresh),
+                        icon: const Icon(Symbols.refresh),
                         label: Text(tr.common.retry),
                       ),
                     ],
@@ -205,23 +184,13 @@ class _SetupScreenState extends State<SetupScreen> {
       );
       setState(() => _keyOk = true);
     } on AppError catch (e) {
+      debugPrint(e.cause?.toString());
       setState(() => _error = e.message);
-    } catch (_) {
+    } catch (e, s) {
+      debugPrint('$e\n$s');
       setState(() => _error = tr.setup.connectionFailed);
     }
     setState(() => _testing = false);
-  }
-
-  Future<void> _requestMic() async {
-    var granted = false;
-    try {
-      granted = await AudioRecorder().hasPermission();
-    } catch (_) {}
-    await widget.app.saveSettings(
-      widget.app.settings.copyWith(micPermissionDenied: !granted),
-    );
-    setState(() => _step = 2);
-    unawaited(_provision());
   }
 
   Future<void> _provision() async {

@@ -1,21 +1,18 @@
 import 'package:flutter/material.dart';
 
 /// Single source of truth for Texa's fixed values.
-const double boardWidth = 1200;
-const double boardHeight = 1600;
+const double boardWidth = 1600;
+const double boardHeight = 1200;
 const Size boardSize = Size(boardWidth, boardHeight);
 const String apiBaseUrl = 'https://api.meta.ai/v1';
 const String ignoreTurnSentinel = '<[IGNORE_TURN]>';
 const int frameIntervalMs = 1000;
-const int frameWidth = 540;
-const int frameHeight = 720;
+const int frameWidth = 720;
+const int frameHeight = 540;
 const int vadSilenceMs = 1000;
 const int sustainedSpeechMs = 300;
-const int sampleRate = 16000;
-const int connectTimeoutSeconds = 15;
+const int connectTimeoutSeconds = 30;
 const int responseTimeoutSeconds = 120;
-const int kokoroSpeakerId = 0;
-const double kokoroSpeed = 1.0;
 const String kokoroModelUrl = String.fromEnvironment(
   'KOKORO_MODEL_URL',
   defaultValue: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_1.tar.bz2',
@@ -28,7 +25,6 @@ const String smartTurnModelUrl = String.fromEnvironment(
   'SMART_TURN_MODEL_URL',
   defaultValue: 'https://huggingface.co/soniqo/Smart-Turn-v3.2-ONNX/resolve/main/smart-turn-v3.2-int8.onnx',
 );
-const List<String> subjectOptions = ['Maths', 'Physics', 'Chemistry'];
 Color colorFromName(String? name, Color fallback) {
   switch (name?.toLowerCase()) {
     case 'red':

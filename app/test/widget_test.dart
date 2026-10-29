@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:texa/app_controller.dart';
-import 'package:texa/data/db.dart';
+import 'package:texa/core/data/db.dart';
 import 'package:texa/features/home/home_screen.dart';
 import 'package:texa/generated/i18n/translations.g.dart';
 

@@ -14,8 +14,7 @@ class Translations with BaseTranslations<AppLocale, Translations> {
   ///
   /// Usage:
   /// final tr = Translations.of(context);
-  static Translations of(BuildContext context) =>
-      InheritedLocaleData.of<AppLocale, Translations>(context).translations;
+  static Translations of(BuildContext context) => InheritedLocaleData.of<AppLocale, Translations>(context).translations;
 
   /// You can call this constructor and build your own translation instance of this locale.
   /// Constructing via the enum [AppLocale.build] is preferred.
@@ -24,10 +23,7 @@ class Translations with BaseTranslations<AppLocale, Translations> {
     PluralResolver? cardinalResolver,
     PluralResolver? ordinalResolver,
     TranslationMetadata<AppLocale, Translations>? meta,
-  }) : assert(
-         overrides == null,
-         'Set "translation_overrides: true" in order to enable this feature.',
-       ),
+  }) : assert(overrides == null, 'Set "translation_overrides: true" in order to enable this feature.'),
        _meta =
            meta ??
            TranslationMetadata(
@@ -49,27 +45,17 @@ class Translations with BaseTranslations<AppLocale, Translations> {
 
   late final Translations _root = this; // ignore: unused_field
 
-  Translations $copyWith({
-    TranslationMetadata<AppLocale, Translations>? meta,
-  }) => Translations(meta: meta ?? this.$meta);
+  Translations $copyWith({TranslationMetadata<AppLocale, Translations>? meta}) =>
+      Translations(meta: meta ?? this.$meta);
 
   // Translations
   late final Translations$app$en app = Translations$app$en.internal(_root);
-  late final Translations$common$en common = Translations$common$en.internal(
-    _root,
-  );
-  late final Translations$setup$en setup = Translations$setup$en.internal(
-    _root,
-  );
+  late final Translations$common$en common = Translations$common$en.internal(_root);
+  late final Translations$setup$en setup = Translations$setup$en.internal(_root);
   late final Translations$home$en home = Translations$home$en.internal(_root);
-  late final Translations$session$en session = Translations$session$en.internal(
-    _root,
-  );
-  late final Translations$settings$en settings =
-      Translations$settings$en.internal(_root);
-  late final Translations$errors$en errors = Translations$errors$en.internal(
-    _root,
-  );
+  late final Translations$session$en session = Translations$session$en.internal(_root);
+  late final Translations$settings$en settings = Translations$settings$en.internal(_root);
+  late final Translations$errors$en errors = Translations$errors$en.internal(_root);
   late final Translations$core$en core = Translations$core$en.internal(_root);
 }
 
@@ -94,6 +80,11 @@ class Translations$common$en {
   final Translations _root; // ignore: unused_field
 
   // Translations
+
+  /// Button dismissing an informational notice.
+  ///
+  /// en: 'Got it'
+  String get gotIt => 'Got it';
 
   /// Cancel button in dialogs.
   ///
@@ -141,14 +132,12 @@ class Translations$common$en {
   /// Validation message when too few files are selected. {min} is the minimum.
   ///
   /// en: 'Add at least {min} file(s)'
-  String validationIndicatingMinimum({required Object min}) =>
-      'Add at least ${min} file(s)';
+  String validationIndicatingMinimum({required Object min}) => 'Add at least ${min} file(s)';
 
   /// Validation message when too many files are selected. {max} is the maximum.
   ///
   /// en: 'Add at most {max} files'
-  String validationIndicatingMaximum({required Object max}) =>
-      'Add at most ${max} files';
+  String validationIndicatingMaximum({required Object max}) => 'Add at most ${max} files';
 }
 
 // Path: setup
@@ -172,9 +161,9 @@ class Translations$setup$en {
 
   /// Privacy note in setup and Settings.
   ///
-  /// en: 'Your board and voice are sent to Meta AI so the tutor can see and hear your work. Nothing is sent to Texa servers — there are none.'
+  /// en: 'Texa's AI Agent is powered by the Meta AI models. Provide your valid Meta AI API Kay to continue.'
   String get privacyNote =>
-      'Your board and voice are sent to Meta AI so the tutor can see and hear your work. Nothing is sent to Texa servers — there are none.';
+      'Texa\'s AI Agent is powered by the Meta AI models. Provide your valid Meta AI API Kay to continue.';
 
   /// Label for the API key field in setup and Settings.
   ///
@@ -185,6 +174,12 @@ class Translations$setup$en {
   ///
   /// en: 'Paste your API key'
   String get apiKeyHint => 'Paste your API key';
+
+  /// Note under the API key field explaining secure on-device storage.
+  ///
+  /// en: 'Your key is stored securely on this device and never leaves it except to call Meta AI.'
+  String get apiKeySecureNote =>
+      'Your key is stored securely on this device and never leaves it except to call Meta AI.';
 
   /// Button that checks the API key works.
   ///
@@ -204,29 +199,7 @@ class Translations$setup$en {
   /// Error after a failed connection test.
   ///
   /// en: 'That key did not work. Check it and try again.'
-  String get connectionFailed =>
-      'That key did not work. Check it and try again.';
-
-  /// Heading for the microphone permission step.
-  ///
-  /// en: 'Talk while you draw'
-  String get micTitle => 'Talk while you draw';
-
-  /// Explanation for microphone permission.
-  ///
-  /// en: 'Texa listens so you can explain your thinking out loud. You can use Texa without the microphone, drawing and typing instead.'
-  String get micBody =>
-      'Texa listens so you can explain your thinking out loud. You can use Texa without the microphone, drawing and typing instead.';
-
-  /// Button requesting microphone permission.
-  ///
-  /// en: 'Allow microphone'
-  String get allowMic => 'Allow microphone';
-
-  /// Button to continue without microphone permission.
-  ///
-  /// en: 'Continue without microphone'
-  String get skipMic => 'Continue without microphone';
+  String get connectionFailed => 'That key did not work. Check it and try again.';
 
   /// Heading while on-device speech models download.
   ///
@@ -252,8 +225,7 @@ class Translations$setup$en {
   /// Download progress. {name} is the model name, {percent} is 0-100.
   ///
   /// en: 'Downloading {name}… {percent}%'
-  String downloading({required Object name, required Object percent}) =>
-      'Downloading ${name}… ${percent}%';
+  String downloading({required Object name, required Object percent}) => 'Downloading ${name}… ${percent}%';
 }
 
 // Path: home
@@ -282,8 +254,7 @@ class Translations$home$en {
   /// Empty-state explanation on Home.
   ///
   /// en: 'Create a session, draw your problem on the board, and talk Texa through it.'
-  String get emptyBody =>
-      'Create a session, draw your problem on the board, and talk Texa through it.';
+  String get emptyBody => 'Create a session, draw your problem on the board, and talk Texa through it.';
 
   /// Settings button tooltip on Home.
   ///
@@ -298,8 +269,7 @@ class Translations$home$en {
   /// Confirmation dialog body for deleting a session.
   ///
   /// en: 'Its board and history will be permanently deleted from this device.'
-  String get deleteSessionBody =>
-      'Its board and history will be permanently deleted from this device.';
+  String get deleteSessionBody => 'Its board and history will be permanently deleted from this device.';
 
   /// Rename dialog title.
   ///
@@ -319,23 +289,62 @@ class Translations$home$en {
   /// Explanation in the model picker.
   ///
   /// en: 'This model will tutor this session. It cannot be changed later.'
-  String get chooseModelBody =>
-      'This model will tutor this session. It cannot be changed later.';
+  String get chooseModelBody => 'This model will tutor this session. It cannot be changed later.';
+
+  /// Model dropdown option that reveals a free-text model name field.
+  ///
+  /// en: 'Custom'
+  String get customModel => 'Custom';
 
   /// Text field for typing a model name in the picker.
   ///
   /// en: 'Model name'
   String get modelNameLabel => 'Model name';
 
-  /// Button that fetches the model list from the API.
-  ///
-  /// en: 'Load available models'
-  String get loadModels => 'Load available models';
-
   /// Confirm button in the model picker.
   ///
   /// en: 'Create session'
   String get createSession => 'Create session';
+
+  /// Label for the reasoning-effort dropdown in the new-session dialog.
+  ///
+  /// en: 'Reasoning effort'
+  String get reasoningLabel => 'Reasoning effort';
+
+  /// Reasoning effort: do not send a reasoning parameter.
+  ///
+  /// en: 'None (model default)'
+  String get reasoningNone => 'None (model default)';
+
+  /// Reasoning effort option: minimal.
+  ///
+  /// en: 'Minimal'
+  String get reasoningMinimal => 'Minimal';
+
+  /// Reasoning effort option: low.
+  ///
+  /// en: 'Low'
+  String get reasoningLow => 'Low';
+
+  /// Reasoning effort option: medium.
+  ///
+  /// en: 'Medium'
+  String get reasoningMedium => 'Medium';
+
+  /// Reasoning effort option: high.
+  ///
+  /// en: 'High'
+  String get reasoningHigh => 'High';
+
+  /// Reasoning effort option: xhigh.
+  ///
+  /// en: 'Extra high'
+  String get reasoningXHigh => 'Extra high';
+
+  /// Home session card chip showing the session reasoning effort.
+  ///
+  /// en: 'Reasoning: {effort}'
+  String reasoningChip({required Object effort}) => 'Reasoning: ${effort}';
 }
 
 // Path: session
@@ -371,26 +380,27 @@ class Translations$session$en {
   /// en: 'Microphone off'
   String get muted => 'Microphone off';
 
+  /// Title of the macOS headphones notice shown when a session starts.
+  ///
+  /// en: 'Headphones needed on Mac'
+  String get headphonesTitle => 'Headphones needed on Mac';
+
+  /// Body of the macOS headphones notice shown when a session starts.
+  ///
+  /// en: 'In this version, macOS can't stop Texa from hearing its own voice through your speakers, so it would hear itself and get stuck in a loop. Please use headphones for voice sessions on Mac.'
+  String get headphonesBody =>
+      'In this version, macOS can\'t stop Texa from hearing its own voice through your speakers, so it would hear itself and get stuck in a loop. Please use headphones for voice sessions on Mac.';
+
   /// Hint shown when microphone permission was denied.
   ///
-  /// en: 'Draw-only mode — type your question below, or enable the microphone in Settings.'
+  /// en: 'Draw-only mode — draw on the board or attach a file, or enable the microphone in Settings.'
   String get drawOnlyHint =>
-      'Draw-only mode — type your question below, or enable the microphone in Settings.';
+      'Draw-only mode — draw on the board or attach a file, or enable the microphone in Settings.';
 
   /// Hint encouraging the student to speak while drawing.
   ///
   /// en: 'I'm listening — tell me what you're doing'
   String get listenHint => 'I\'m listening — tell me what you\'re doing';
-
-  /// Button that sends the current board and typed question to the tutor.
-  ///
-  /// en: 'Ask Texa'
-  String get askTexa => 'Ask Texa';
-
-  /// Placeholder for the typed question field.
-  ///
-  /// en: 'Type your question (optional)…'
-  String get typeQuestion => 'Type your question (optional)…';
 
   /// Button that stops AI speech and drawing.
   ///
@@ -402,10 +412,30 @@ class Translations$session$en {
   /// en: 'Pen'
   String get pen => 'Pen';
 
+  /// Tooltip for the straight-line drawing tool.
+  ///
+  /// en: 'Straight line'
+  String get lineTool => 'Straight line';
+
+  /// Tooltip for the pen colour picker button.
+  ///
+  /// en: 'Pen colour'
+  String get penColor => 'Pen colour';
+
   /// Eraser tool tooltip.
   ///
   /// en: 'Eraser'
   String get eraser => 'Eraser';
+
+  /// Toolbar slider tooltip: width of pen and straight-line strokes.
+  ///
+  /// en: 'Stroke width'
+  String get strokeWidth => 'Stroke width';
+
+  /// Toolbar slider tooltip: eraser size.
+  ///
+  /// en: 'Eraser width'
+  String get eraserWidth => 'Eraser width';
 
   /// Undo tooltip.
   ///
@@ -430,8 +460,7 @@ class Translations$session$en {
   /// Confirmation body before clearing the board.
   ///
   /// en: 'Everything on the board will be erased. This cannot be undone.'
-  String get clearBody =>
-      'Everything on the board will be erased. This cannot be undone.';
+  String get clearBody => 'Everything on the board will be erased. This cannot be undone.';
 
   /// Tooltip to mute the microphone.
   ///
@@ -463,11 +492,6 @@ class Translations$session$en {
   /// en: 'More options'
   String get more => 'More options';
 
-  /// Label for the optional subject selector.
-  ///
-  /// en: 'Subject'
-  String get subject => 'Subject';
-
   /// Button that re-sends the last turn after a failure.
   ///
   /// en: 'Retry turn'
@@ -483,8 +507,7 @@ class Translations$session$en {
   /// en: 'Nothing here yet. Draw and ask your first question.'
   String get noHistory => 'Nothing here yet. Draw and ask your first question.';
 
-  late final Translations$session$inputFile$en inputFile =
-      Translations$session$inputFile$en.internal(_root);
+  late final Translations$session$inputFile$en inputFile = Translations$session$inputFile$en.internal(_root);
 }
 
 // Path: settings
@@ -533,8 +556,7 @@ class Translations$settings$en {
   /// Confirmation body for wiping all data.
   ///
   /// en: 'All sessions, boards and your API key will be removed from this device.'
-  String get deleteAllBody =>
-      'All sessions, boards and your API key will be removed from this device.';
+  String get deleteAllBody => 'All sessions, boards and your API key will be removed from this device.';
 
   /// Section heading for local debug logs.
   ///
@@ -579,14 +601,12 @@ class Translations$errors$en {
   /// Plain-language network error.
   ///
   /// en: 'Could not reach Meta AI. Check your connection and try again.'
-  String get network =>
-      'Could not reach Meta AI. Check your connection and try again.';
+  String get network => 'Could not reach Meta AI. Check your connection and try again.';
 
   /// Error banner after a failed turn.
   ///
   /// en: 'That turn could not be sent. Your work is safe on the board.'
-  String get turnFailed =>
-      'That turn could not be sent. Your work is safe on the board.';
+  String get turnFailed => 'That turn could not be sent. Your work is safe on the board.';
 }
 
 // Path: core
@@ -596,8 +616,7 @@ class Translations$core$en {
   final Translations _root; // ignore: unused_field
 
   // Translations
-  late final Translations$core$files$en files =
-      Translations$core$files$en.internal(_root);
+  late final Translations$core$files$en files = Translations$core$files$en.internal(_root);
 }
 
 // Path: session.inputFile
@@ -646,14 +665,12 @@ class Translations$session$inputFile$en {
   /// Error when a file exceeds the size limit. {sizeInMb} is the limit in megabytes.
   ///
   /// en: 'Files must be {sizeInMb} MB or smaller'
-  String fileTooLarge({required Object sizeInMb}) =>
-      'Files must be ${sizeInMb} MB or smaller';
+  String fileTooLarge({required Object sizeInMb}) => 'Files must be ${sizeInMb} MB or smaller';
 
   /// Empty state in the upload modal grid.
   ///
   /// en: 'No files selected yet. Choose an option above to add some.'
-  String get noFilesYet =>
-      'No files selected yet. Choose an option above to add some.';
+  String get noFilesYet => 'No files selected yet. Choose an option above to add some.';
 
   /// Label on the file control showing how many files are attached. {count} is the number.
   ///
@@ -689,6 +706,7 @@ extension on Translations {
   dynamic _flatMapFunction(String path) {
     return switch (path) {
       'app.title' => 'Texa',
+      'common.gotIt' => 'Got it',
       'common.cancel' => 'Cancel',
       'common.delete' => 'Delete',
       'common.rename' => 'Rename',
@@ -697,82 +715,80 @@ extension on Translations {
       'common.kContinue' => 'Continue',
       'common.back' => 'Back',
       'common.close' => 'Close',
-      'common.maxReached' => ({
-        required Object max,
-      }) => 'You can add up to ${max} files',
-      'common.validationIndicatingMinimum' => ({
-        required Object min,
-      }) => 'Add at least ${min} file(s)',
-      'common.validationIndicatingMaximum' => ({
-        required Object max,
-      }) => 'Add at most ${max} files',
+      'common.maxReached' => ({required Object max}) => 'You can add up to ${max} files',
+      'common.validationIndicatingMinimum' => ({required Object min}) => 'Add at least ${min} file(s)',
+      'common.validationIndicatingMaximum' => ({required Object max}) => 'Add at most ${max} files',
       'setup.welcomeTitle' => 'Your AI tutor that draws with you',
       'setup.welcomeBody' => 'Draw on the shared board, talk out loud, and Texa will explain step by step — writing, drawing and pointing right on your work.',
-      'setup.privacyNote' => 'Your board and voice are sent to Meta AI so the tutor can see and hear your work. Nothing is sent to Texa servers — there are none.',
+      'setup.privacyNote' =>
+        'Texa\'s AI Agent is powered by the Meta AI models. Provide your valid Meta AI API Kay to continue.',
       'setup.apiKeyLabel' => 'Meta AI API key',
       'setup.apiKeyHint' => 'Paste your API key',
+      'setup.apiKeySecureNote' =>
+        'Your key is stored securely on this device and never leaves it except to call Meta AI.',
       'setup.testConnection' => 'Test connection',
       'setup.testing' => 'Testing…',
       'setup.connectionOk' => 'Connection works — you are ready.',
-      'setup.connectionFailed' =>
-        'That key did not work. Check it and try again.',
-      'setup.micTitle' => 'Talk while you draw',
-      'setup.micBody' => 'Texa listens so you can explain your thinking out loud. You can use Texa without the microphone, drawing and typing instead.',
-      'setup.allowMic' => 'Allow microphone',
-      'setup.skipMic' => 'Continue without microphone',
+      'setup.connectionFailed' => 'That key did not work. Check it and try again.',
       'setup.modelsTitle' => 'Setting up speech',
-      'setup.modelsBody' => 'Texa downloads its on-device voice models once. This can take a few minutes on a slow connection.',
+      'setup.modelsBody' =>
+        'Texa downloads its on-device voice models once. This can take a few minutes on a slow connection.',
       'setup.modelsReady' => 'Speech is ready',
       'setup.modelsFailed' => 'Speech models could not be set up.',
-      'setup.downloading' => ({
-        required Object name,
-        required Object percent,
-      }) => 'Downloading ${name}… ${percent}%',
+      'setup.downloading' => ({required Object name, required Object percent}) => 'Downloading ${name}… ${percent}%',
       'home.title' => 'Texa',
       'home.newSession' => 'New session',
       'home.emptyTitle' => 'Start learning with Texa',
       'home.emptyBody' => 'Create a session, draw your problem on the board, and talk Texa through it.',
       'home.settings' => 'Settings',
       'home.deleteSessionTitle' => 'Delete this session?',
-      'home.deleteSessionBody' =>
-        'Its board and history will be permanently deleted from this device.',
+      'home.deleteSessionBody' => 'Its board and history will be permanently deleted from this device.',
       'home.renameTitle' => 'Rename session',
       'home.sessionName' => 'Session name',
       'home.chooseModel' => 'Choose the AI model',
-      'home.chooseModelBody' =>
-        'This model will tutor this session. It cannot be changed later.',
+      'home.chooseModelBody' => 'This model will tutor this session. It cannot be changed later.',
+      'home.customModel' => 'Custom',
       'home.modelNameLabel' => 'Model name',
-      'home.loadModels' => 'Load available models',
       'home.createSession' => 'Create session',
+      'home.reasoningLabel' => 'Reasoning effort',
+      'home.reasoningNone' => 'None (model default)',
+      'home.reasoningMinimal' => 'Minimal',
+      'home.reasoningLow' => 'Low',
+      'home.reasoningMedium' => 'Medium',
+      'home.reasoningHigh' => 'High',
+      'home.reasoningXHigh' => 'Extra high',
+      'home.reasoningChip' => ({required Object effort}) => 'Reasoning: ${effort}',
       'session.listening' => 'Listening…',
       'session.capturing' => 'Listening — I can hear you',
       'session.thinking' => 'Thinking…',
       'session.speaking' => 'Speaking…',
       'session.muted' => 'Microphone off',
-      'session.drawOnlyHint' => 'Draw-only mode — type your question below, or enable the microphone in Settings.',
+      'session.headphonesTitle' => 'Headphones needed on Mac',
+      'session.headphonesBody' => 'In this version, macOS can\'t stop Texa from hearing its own voice through your speakers, so it would hear itself and get stuck in a loop. Please use headphones for voice sessions on Mac.',
+      'session.drawOnlyHint' =>
+        'Draw-only mode — draw on the board or attach a file, or enable the microphone in Settings.',
       'session.listenHint' => 'I\'m listening — tell me what you\'re doing',
-      'session.askTexa' => 'Ask Texa',
-      'session.typeQuestion' => 'Type your question (optional)…',
       'session.stop' => 'Stop',
       'session.pen' => 'Pen',
+      'session.lineTool' => 'Straight line',
+      'session.penColor' => 'Pen colour',
       'session.eraser' => 'Eraser',
+      'session.strokeWidth' => 'Stroke width',
+      'session.eraserWidth' => 'Eraser width',
       'session.undo' => 'Undo',
       'session.redo' => 'Redo',
       'session.clearBoard' => 'Clear board',
       'session.clearTitle' => 'Clear the board?',
-      'session.clearBody' =>
-        'Everything on the board will be erased. This cannot be undone.',
+      'session.clearBody' => 'Everything on the board will be erased. This cannot be undone.',
       'session.micOn' => 'Mute microphone',
       'session.micOff' => 'Unmute microphone',
       'session.captionsOn' => 'Turn captions off',
       'session.captionsOff' => 'Turn captions on',
       'session.fullscreen' => 'Fullscreen',
       'session.more' => 'More options',
-      'session.subject' => 'Subject',
       'session.retryTurn' => 'Retry turn',
       'session.history' => 'History',
-      'session.noHistory' =>
-        'Nothing here yet. Draw and ask your first question.',
+      'session.noHistory' => 'Nothing here yet. Draw and ask your first question.',
       'session.inputFile.addFiles' => 'Add files',
       'session.inputFile.uploadTitle' => 'Add files',
       'session.inputFile.imageGallery' => 'Photo gallery',
@@ -780,14 +796,9 @@ extension on Translations {
       'session.inputFile.selectFiles' => 'Browse files',
       'session.inputFile.recordAudio' => 'Record audio',
       'session.inputFile.recordAudioTooltip' => 'Record audio',
-      'session.inputFile.fileTooLarge' => ({
-        required Object sizeInMb,
-      }) => 'Files must be ${sizeInMb} MB or smaller',
-      'session.inputFile.noFilesYet' =>
-        'No files selected yet. Choose an option above to add some.',
-      'session.inputFile.filesAttached' => ({
-        required Object count,
-      }) => '${count} file(s) attached',
+      'session.inputFile.fileTooLarge' => ({required Object sizeInMb}) => 'Files must be ${sizeInMb} MB or smaller',
+      'session.inputFile.noFilesYet' => 'No files selected yet. Choose an option above to add some.',
+      'session.inputFile.filesAttached' => ({required Object count}) => '${count} file(s) attached',
       'session.inputFile.removeFile' => 'Remove file',
       'settings.title' => 'Settings',
       'settings.apiSection' => 'Meta AI connection',
@@ -803,10 +814,8 @@ extension on Translations {
       'settings.memoryDescription' => 'What Texa remembers about the student across all sessions: level, goals, preferences and learning patterns. Texa updates this itself; you can also edit it here.',
       'settings.memoryLabel' => 'Memory',
       'settings.memoryHint' => 'Nothing remembered yet.',
-      'errors.network' =>
-        'Could not reach Meta AI. Check your connection and try again.',
-      'errors.turnFailed' =>
-        'That turn could not be sent. Your work is safe on the board.',
+      'errors.network' => 'Could not reach Meta AI. Check your connection and try again.',
+      'errors.turnFailed' => 'That turn could not be sent. Your work is safe on the board.',
       'core.files.recordingMaxDuration' => 'Maximum recording length reached',
       _ => null,
     };

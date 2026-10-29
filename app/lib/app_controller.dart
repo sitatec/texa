@@ -1,9 +1,9 @@
 import 'package:flutter/foundation.dart';
 
-import 'data/db.dart';
-import 'data/models.dart';
-import 'features/turn/model_provisioning.dart';
-import 'features/turn/sherpa_speech.dart';
+import 'core/data/db.dart';
+import 'core/data/models.dart';
+import 'features/study_session/speech/model_provisioning.dart';
+import 'features/study_session/speech/sherpa_speech.dart';
 
 /// App-wide state: settings, sessions and speech readiness.
 class AppController extends ChangeNotifier {
@@ -62,13 +62,14 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<Session> createSession(String model) async {
+  Future<Session> createSession(String model, {String? reasoningEffort}) async {
     final now = DateTime.now();
     final session = Session(
       id: newId(),
       title:
           'Session · ${now.day}/${now.month}, ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}',
       model: model,
+      reasoningEffort: reasoningEffort,
       createdAt: now,
       updatedAt: now,
     );
