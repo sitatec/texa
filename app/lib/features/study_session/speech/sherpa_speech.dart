@@ -65,11 +65,11 @@ class SherpaSpeech {
   }
 
   /// Verifies Silero loads against the installed model file.
-  Future<bool> verifyVad(String vadPath) async {
+  Future<bool> verifyVad(String vadPath, {String smartTurnPath = ""}) async {
     sherpa.VoiceActivityDetector? vad;
     try {
       await _ensureBindings();
-      vad = createVad(vadPath);
+      vad = createVad(vadPath, smartTurnPath: smartTurnPath);
       return true;
     } catch (e) {
       debugPrint('Texa sherpa VAD verify: $e');
@@ -82,19 +82,26 @@ class SherpaSpeech {
   }
 
   /// Creates a live VAD for one session's microphone pipeline.
-  sherpa.VoiceActivityDetector createVad(String vadPath) =>
-      sherpa.VoiceActivityDetector(
-        config: sherpa.VadModelConfig(
-          sileroVad: sherpa.SileroVadModelConfig(
-            model: vadPath,
-            minSilenceDuration: vadSilenceMs / 1000.0,
-            minSpeechDuration: sustainedSpeechMs / 1000.0,
-          ),
-          numThreads: 1,
-          debug: kDebugMode,
-        ),
-        bufferSizeInSeconds: 10,
-      );
+  sherpa.VoiceActivityDetector createVad(
+    String vadPath, {
+    String smartTurnPath = "",
+  }) => sherpa.VoiceActivityDetector(
+    config: sherpa.VadModelConfig(
+      sileroVad: sherpa.SileroVadModelConfig(
+        model: vadPath,
+        minSilenceDuration: vadSilenceMs / 1000.0,
+        minSpeechDuration: sustainedSpeechMs / 1000.0,
+        maxSpeechDuration: 20,
+      ),
+      smartTurnConfig: sherpa.SmartTurnConfig(
+        model: smartTurnPath,
+        maxSilenceDuration: 2.5,
+      ),
+      numThreads: 1,
+      debug: kDebugMode,
+    ),
+    bufferSizeInSeconds: 10,
+  );
 
   /// Synthesises [chunk] in the TTS worker, streaming one WAV per
   /// Kokoro sentence as it is generated (Kokoro splits more finely than

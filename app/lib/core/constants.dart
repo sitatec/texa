@@ -10,8 +10,8 @@ const String ignoreTurnSentinel = '<[IGNORE_TURN]>';
 const int frameIntervalMs = 1000;
 const int frameWidth = 720;
 const int frameHeight = 540;
-const int vadSilenceMs = 1000;
-const int sustainedSpeechMs = 300;
+const int vadSilenceMs = 500;
+const int sustainedSpeechMs = 250;
 const int connectTimeoutSeconds = 30;
 const int responseTimeoutSeconds = 120;
 

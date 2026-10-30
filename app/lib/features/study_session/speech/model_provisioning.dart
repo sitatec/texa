@@ -110,6 +110,11 @@ class ModelProvisioningService {
   Future<String> get vadPath async {
     await _store.activate();
     return _store.pathFor('silero_vad.onnx');
+  }  
+  
+  Future<String> get smartTurnPath async {
+    await _store.activate();
+    return _store.pathFor('smart-turn-v3.2-int8.onnx');
   }
 
   /// Downloads the speech models for [engine], reporting

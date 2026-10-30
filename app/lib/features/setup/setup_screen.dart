@@ -213,6 +213,7 @@ class _SetupScreenState extends State<SetupScreen> {
       }, engine: widget.app.settings.ttsEngineOrDefault);
       final vadOk = await widget.app.speech.verifyVad(
         await widget.app.provisioning.vadPath,
+        smartTurnPath: await widget.app.provisioning.smartTurnPath,
       );
       final ttsOk = await widget.app.tryInitSpeech();
       if (!vadOk || !ttsOk) {
