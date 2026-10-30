@@ -24,7 +24,7 @@ import 'board_controller.dart';
 import 'turn_video_encoder/pcm_second_buffer.dart';
 import 'turn_video_encoder/turn_video_encoder.dart';
 
-enum TurnState { listening, capturing, thinking, speaking, muted }
+enum TurnState { listening, capturing, thinking, speaking, working, muted }
 
 const int _sampleRate = 16000;
 
@@ -53,7 +53,12 @@ class SessionController extends ChangeNotifier {
   String memoryText = '';
   List<SessionObservation> observations = [];
   String sessionObservation = '';
-  String? _searchResultsText;
+
+  /// Tool calls queued for playback whose outcome the AI client is
+  /// waiting on, keyed by their queued item. Completed by the playback
+  /// consumer as soon as the action has actually been performed (or
+  /// failed when playback is interrupted before it runs).
+  final Map<ActionItem, Completer<AiToolResult>> _pendingToolCalls = {};
   bool _disposed = false;
 
   /// Uploads staged by the student, sent with their next explicit turn
@@ -90,12 +95,34 @@ class SessionController extends ChangeNotifier {
   String _currentSpeechChunkForSuspend = '';
   int _playbackGeneration = 0;
 
+  /// Tool the AI is performing right now (e.g. `write_math`), set by
+  /// the playback consumer for exactly the duration of the action so
+  /// the status pill can say "Writing math expression…" instead of a
+  /// generic state. Null between actions.
+  String? activeActionTool;
+
+  /// Whether an AI reply is in flight at all (generating, speaking or
+  /// drawing). Drives the Stop button: it must be available from the
+  /// moment the turn is sent, not only once speech starts.
+  bool get replyActive => _playing;
+
+  /// What the status pill should show, in priority order: the specific
+  /// action being performed, then the coarse turn state. `speaking` is
+  /// only reported while audio is actually playing (or queued to play);
+  /// a reply that is busy with anything else - waiting between steps,
+  /// drawing silently, wrapping up - reports `working`, never a
+  /// misleading "Speaking…". Waiting on the model is `thinking`, which
+  /// is where a turn stays until the first speech or action starts.
   String get statusKey {
+    final tool = activeActionTool;
+    if (tool != null && _playing) return 'action:$tool';
     return switch (state) {
       TurnState.capturing => 'capturing',
       TurnState.thinking => 'thinking',
-      TurnState.speaking => 'speaking',
-      _ => micMuted ? 'muted' : 'listening',
+      TurnState.speaking => speaker.isSpeaking ? 'speaking' : 'working',
+      TurnState.working => 'working',
+      TurnState.muted => 'muted',
+      TurnState.listening => micMuted ? 'muted' : 'listening',
     };
   }
 
@@ -271,11 +298,10 @@ class SessionController extends ChangeNotifier {
     final now = DateTime.now();
     if (voice) {
       _lastVoiceAt = now;
-      if (state == TurnState.speaking && !_playbackCancelled) {
+      if (_playing && !_playbackCancelled) {
         unawaited(interruptPlayback(fromVoice: true));
       }
-      if (!_capturing &&
-          (state == TurnState.listening || state == TurnState.speaking)) {
+      if (!_capturing && (state == TurnState.listening || _playing)) {
         _beginCapture(now);
       }
       if (_capturing) {
@@ -293,6 +319,10 @@ class SessionController extends ChangeNotifier {
   void _beginCapture(DateTime now) {
     if (_capturing) return;
     _capturing = true;
+    // The student is speaking again: any error banner (with its retry
+    // affordance) from the previous turn is stale, so drop it now
+    // rather than leaving it up until the new turn resolves.
+    if (errorMessage != null) errorMessage = null;
     _speechStart = now;
     _drewDuringCapture = false;
     _startTurnEncoder();
@@ -324,7 +354,7 @@ class SessionController extends ChangeNotifier {
     }
     if (speechMs < 120 || _pcm.totalReceived == 0) {
       await _discardTurnEncoder();
-      state = _playing ? TurnState.speaking : TurnState.listening;
+      state = _playing ? TurnState.working : TurnState.listening;
       notifyListeners();
       return;
     }
@@ -459,7 +489,13 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
     final videoB64 = base64Encode(turn.mp4Bytes);
     if (recordStudentMessage) {
-      final studentPayload = <String, dynamic>{'hasVideo': true};
+      final studentPayload = <String, dynamic>{
+        'hasVideo': true,
+        // Kept (base64, like thumbnails) so the history can replay the
+        // turn video locally; only the response id is ever resent to
+        // the API, never these bytes again.
+        'videoBase64': videoB64,
+      };
       messages.add(
         ChatMessage(
           id: newId(),
@@ -478,12 +514,6 @@ class SessionController extends ChangeNotifier {
         interruption: turn.interruption,
         uploads: turn.uploads,
       );
-      // A search during that reply gets its results in one follow-up request.
-      final results = _searchResultsText;
-      _searchResultsText = null;
-      if (results != null && results.isNotEmpty) {
-        await _streamReply(extraContext: results);
-      }
       _failedTurn = null;
     } on AppError catch (e) {
       _failedTurn = turn;
@@ -631,7 +661,7 @@ class SessionController extends ChangeNotifier {
   }
 
   Future<void> _streamReply({
-    String? videoB64,
+    required String videoB64,
     SuspendedPlayback? interruption,
     List<AiUpload> uploads = const [],
     String? extraContext,
@@ -642,10 +672,54 @@ class SessionController extends ChangeNotifier {
     _producerDone = false;
     _playbackCancelled = false;
     _playing = true;
-    state = TurnState.speaking;
+    // Thinking, not speaking: no speech (and possibly no reply at all)
+    // exists yet. The consumer promotes this to speaking / the specific
+    // action as it actually performs each queued item.
+    state = TurnState.thinking;
     notifyListeners();
     final generation = _playbackGeneration;
     final consumer = _consumeQueue(generation);
+
+    // Performs one tool call the model asked for and reports the outcome
+    // back to it. Board/notebook actions go through the playback queue
+    // (so speech and drawing stay in the order the model issued them)
+    // and the future only completes when the consumer has actually
+    // performed the action; the AI client then sends that result to the
+    // model before asking it for the next step.
+    Future<AiToolResult> executeToolCall(
+      String name,
+      Map<String, dynamic> args,
+    ) async {
+      if (generation != _playbackGeneration || _playbackCancelled) {
+        return const AiToolResult.failure(
+          'Playback was interrupted before this action ran.',
+        );
+      }
+      if (name == 'search_session_observations') {
+        return AiToolResult.success(_observationSearchText(args));
+      }
+      if (name == 'resume_explanation') {
+        _queue.add(ResumeItem());
+        return const AiToolResult.success(
+          'The suspended explanation will resume.',
+        );
+      }
+      final item = ActionItem(name, args);
+      final completer = Completer<AiToolResult>();
+      _pendingToolCalls[item] = completer;
+      _queue.add(item);
+      final result = await completer.future;
+      // The result is on its way back to the model: until it replies
+      // with speech or the next action, we are waiting on it again.
+      if (generation == _playbackGeneration &&
+          !_playbackCancelled &&
+          activeActionTool == null) {
+        state = TurnState.thinking;
+        notifyListeners();
+      }
+      return result;
+    }
+
     final splitter = StreamingSpeechSplitter();
     final held = <String>[];
     var textReleased = false;
@@ -656,7 +730,6 @@ class SessionController extends ChangeNotifier {
       await for (final event in client.streamTurn(
         model: session.model,
         history: messages,
-        registry: board.registry,
         videoBase64: videoB64,
         interruptionContext: interruption?.toContext(),
         studentMemory: memoryText,
@@ -665,6 +738,7 @@ class SessionController extends ChangeNotifier {
         uploads: uploads,
         extraContext: extraContext,
         reasoningEffort: session.reasoningEffort,
+        executeToolCall: executeToolCall,
       )) {
         if (generation != _playbackGeneration) break;
         if (event is AiTextDelta) {
@@ -689,7 +763,11 @@ class SessionController extends ChangeNotifier {
           }
         } else if (event is AiToolCallComplete) {
           sawTool = true;
-          toolCallsRaw.add({'name': event.name, 'args': event.args});
+          toolCallsRaw.add({
+            if (event.callId.isNotEmpty) 'id': event.callId,
+            'name': event.name,
+            'args': event.args,
+          });
           for (final h in held) {
             _queue.add(TextItem(h));
           }
@@ -698,13 +776,9 @@ class SessionController extends ChangeNotifier {
           for (final s in splitter.flush()) {
             _queue.add(TextItem(s));
           }
-          if (event.name == 'search_session_observations') {
-            _runObservationSearch(event.args);
-          } else if (event.name == 'resume_explanation') {
-            _queue.add(ResumeItem());
-          } else {
-            _queue.add(ActionItem(event.name, event.args));
-          }
+          // Performing the call (and reporting its outcome to the model)
+          // is executeToolCall's job, above; here we only keep the
+          // surrounding text flowing to playback in order.
         } else if (event is AiStreamDone) {
           rawText = event.fullText;
           final parsed = parseReply(
@@ -794,25 +868,57 @@ class SessionController extends ChangeNotifier {
         }
         if (generation != _playbackGeneration) break;
         if (item is TextItem) {
+          state = TurnState.speaking;
+          notifyListeners();
           _currentSpeechChunkForSuspend =
               splitSpeech(item.text).firstOrNull ?? item.text;
           speaker.enqueueText(item.text);
           await speaker.drained;
           _queue.completed.add({'tool': 'text', 'rect': ''});
         } else if (item is ActionItem) {
-          await _executeAction(item);
+          activeActionTool = item.tool;
+          notifyListeners();
+          AiToolResult result;
+          try {
+            result = await _executeAction(item);
+          } catch (e) {
+            result = AiToolResult.failure('The action failed: $e');
+          }
+          activeActionTool = null;
+          notifyListeners();
+          _pendingToolCalls.remove(item)?.complete(result);
         }
         if (_disposed) break;
       }
     } finally {
+      _failPendingToolCalls('Playback stopped before this action ran.');
+      if (activeActionTool != null) activeActionTool = null;
       _playing = false;
+      if (!_disposed &&
+          generation == _playbackGeneration &&
+          !_capturing &&
+          !_playbackCancelled) {
+        state = micMuted ? TurnState.muted : TurnState.listening;
+        notifyListeners();
+      }
       final c = _playbackIdle;
       _playbackIdle = null;
       if (c != null && !c.isCompleted) c.complete();
     }
   }
 
-  void _runObservationSearch(Map<String, dynamic> args) {
+  void _failPendingToolCalls(String reason) {
+    if (_pendingToolCalls.isEmpty) return;
+    final pending = _pendingToolCalls.values.toList();
+    _pendingToolCalls.clear();
+    for (final completer in pending) {
+      if (!completer.isCompleted) {
+        completer.complete(AiToolResult.failure(reason));
+      }
+    }
+  }
+
+  String _observationSearchText(Map<String, dynamic> args) {
     DateTime? parseDate(String? v) => v == null ? null : DateTime.tryParse(v);
     final results = db.searchObservations(
       observations,
@@ -820,7 +926,7 @@ class SessionController extends ChangeNotifier {
       from: parseDate(args['from'] as String?),
       to: parseDate(args['to'] as String?),
     );
-    _searchResultsText = results.isEmpty
+    return results.isEmpty
         ? 'Your search of past session observations found nothing. Continue the student\'s turn without that history.'
         : 'Results of your search of past session observations: ${results.map((o) => '[${o.date.toIso8601String().substring(0, 10)}] ${o.content}').join(' ')} Use these to continue answering the student\'s last turn; do not redraw steps already on the board.';
   }
@@ -842,9 +948,13 @@ class SessionController extends ChangeNotifier {
     return applyNotebookEdits(current, edits);
   }
 
-  Future<void> _executeAction(ActionItem item) async {
+  /// Performs one board/notebook action and reports whether it actually
+  /// happened, so the outcome can be sent back to the model as the tool
+  /// result (instead of the model assuming every call succeeded).
+  Future<AiToolResult> _executeAction(ActionItem item) async {
     if (item.tool == 'update_session_observation' ||
         item.tool == 'update_memory') {
+      AiToolResult result;
       try {
         if (item.tool == 'update_session_observation') {
           sessionObservation = clampToTwoParagraphs(
@@ -856,15 +966,17 @@ class SessionController extends ChangeNotifier {
           memoryText = _applyNotebookEdits(memoryText, item.args['edits']);
           await db.saveMemory(memoryText);
         }
+        result = const AiToolResult.success('Notebook updated.');
       } catch (e) {
         await db.appendLog('notebook update skipped: $e');
+        result = AiToolResult.failure('The notebook update failed: $e');
       }
       final speech = item.speech;
       if (speech != null && speech.isNotEmpty) {
         speaker.enqueueText(speech);
         await speaker.drained;
       }
-      return;
+      return result;
     }
     final rect = board.rectForArgs(item.args);
     if (rect != null && item.tool != 'remove_element') {
@@ -904,12 +1016,23 @@ class SessionController extends ChangeNotifier {
       });
     }
     _scheduleSave();
+    return applied != null
+        ? AiToolResult.success(
+            '${item.tool} performed on the board at '
+            '${applied.left.round()},${applied.top.round()} '
+            '(${applied.width.round()}x${applied.height.round()}).',
+          )
+        : AiToolResult.failure(
+            '${item.tool} could not be performed: check the element_id, '
+            'the arguments, and that the target element exists.',
+          );
   }
 
   // ---------- Interruption ----------
   /// Halts playback promptly; completed board content stays exactly as drawn.
   Future<void> interruptPlayback({required bool fromVoice}) async {
     if (!_playing) return;
+    _failPendingToolCalls('Playback was interrupted before this action ran.');
     _suspended = _queue.suspend(
       speaker.currentChunk.value ?? _currentSpeechChunkForSuspend,
     );
@@ -922,6 +1045,7 @@ class SessionController extends ChangeNotifier {
       await _aiSub?.cancel();
     } catch (_) {}
     _activeClient?.close();
+    activeActionTool = null;
     state = TurnState.listening;
     notifyListeners();
     // A new playback generation can start (e.g. false-trigger resume).
@@ -945,7 +1069,7 @@ class SessionController extends ChangeNotifier {
     _producerDone = true;
     _playbackCancelled = false;
     _playing = true;
-    state = TurnState.speaking;
+    state = TurnState.working;
     notifyListeners();
     unawaited(_consumeQueue(_playbackGeneration));
   }

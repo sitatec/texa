@@ -98,6 +98,38 @@ class BoardController extends ChangeNotifier {
   }
 
   void beginStudentChange() => _pushUndo();
+
+  // -- Erase undo transaction -------------------------------------------
+  // One erase *drag* is one undo step, however many eraseAt points it
+  // contains. beginErase snapshots the board; the snapshot is only
+  // pushed onto the undo stack when the drag actually changes something
+  // (so tapping the eraser on empty board costs no undo step), and only
+  // once per drag. eraseAt outside a drag is a transaction of its own.
+  String? _eraseSnapshot;
+  bool _eraseSnapshotPushed = false;
+
+  void beginErase() {
+    _eraseSnapshot = _encode();
+    _eraseSnapshotPushed = false;
+  }
+
+  void endErase() {
+    _eraseSnapshot = null;
+    _eraseSnapshotPushed = false;
+  }
+
+  void _recordEraseUndo() {
+    if (_eraseSnapshot != null) {
+      if (_eraseSnapshotPushed) return;
+      _eraseSnapshotPushed = true;
+      _undo.add(_eraseSnapshot!);
+      if (_undo.length > 60) _undo.removeAt(0);
+      _redo.clear();
+    } else {
+      _pushUndo();
+    }
+  }
+
   void addStroke(BoardElement stroke) {
     activeStroke = stroke;
     activeStrokeTick.value++;
@@ -168,6 +200,7 @@ class BoardController extends ChangeNotifier {
       }
     }
     if (changed) {
+      _recordEraseUndo();
       elements = result;
       _changed();
     }
@@ -284,6 +317,44 @@ class BoardController extends ChangeNotifier {
     return null;
   }
 
+  /// Measures plain board text the way the board renders it, wrapped at
+  /// [maxWidth]. Used so a text element's rect is its *actual* rendered
+  /// size instead of a fixed guessed box: short text stays on one line
+  /// at its natural width, long text wraps (at most to the board edge)
+  /// and grows taller. The rect matters beyond looks - it is what the
+  /// registry, camera framing and the eraser all reason about - so it
+  /// must describe what is really on the board.
+  static Size measureBoardText(String text, double fontSize, double maxWidth) {
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(fontSize: fontSize, height: 1.15),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: maxWidth);
+    return painter.size;
+  }
+
+  /// The rect a text element with content [text] should occupy at
+  /// ([x], [y]): natural width, wrapped at the board's right edge,
+  /// measured height. An explicit model-supplied width is honoured as
+  /// the wrap width (still clamped to the board), never as the height.
+  Rect textRectFor({
+    required double x,
+    required double y,
+    required String text,
+    required double fontSize,
+    double? requestedWidth,
+  }) {
+    final toEdge = (boardWidth - x).clamp(80.0, boardWidth);
+    final natural = measureBoardText(text, fontSize, double.infinity).width;
+    final width = requestedWidth == null
+        ? natural.clamp(1.0, toEdge)
+        : requestedWidth.clamp(1.0, toEdge);
+    final height = measureBoardText(text, fontSize, width).height;
+    return Rect.fromLTWH(x, y, width, math.max(height, fontSize * 1.15));
+  }
+
   /// Applies one AI action to the board. Returns its rect, or null to skip it.
   Future<Rect?> applyAction(
     ActionItem item, {
@@ -311,14 +382,28 @@ class BoardController extends ChangeNotifier {
               (a['expression'] as String? ?? '').isEmpty) {
             return null;
           }
-          final rect = clampToBoard(
-            Rect.fromLTWH(
-              n('x', 60),
-              n('y', 60),
-              n('width', item.tool == 'write_text' ? 520 : 420),
-              n('height', item.tool == 'write_text' ? 90 : 260),
-            ),
-          );
+          // Text is free-sized: its rect is measured from the actual
+          // content (see textRectFor), not a fixed 520x90 box that long
+          // text silently overflowed. Other kinds keep explicit boxes -
+          // a plot/SVG genuinely is the rectangle the model asked for,
+          // and a math formula cannot wrap, so its box stays a canvas
+          // for a single line.
+          final rect = item.tool == 'write_text'
+              ? textRectFor(
+                  x: n('x', 60),
+                  y: n('y', 60),
+                  text: a['text'] as String? ?? '',
+                  fontSize: n('size', 38),
+                  requestedWidth: (a['width'] as num?)?.toDouble(),
+                )
+              : clampToBoard(
+                  Rect.fromLTWH(
+                    n('x', 60),
+                    n('y', 60),
+                    n('width', 420),
+                    n('height', 260),
+                  ),
+                );
           final kind = switch (item.tool) {
             'write_text' => BoardElementKind.text,
             'write_math' => BoardElementKind.math,
@@ -428,6 +513,20 @@ class BoardController extends ChangeNotifier {
             expression: a['expression'] as String?,
             progress: 0,
           );
+          // Edited text gets a freshly measured rect too, unless the
+          // model explicitly resized it in the same edit.
+          final edited = elements[i];
+          if (edited.kind == BoardElementKind.text &&
+              a['width'] == null &&
+              a['height'] == null) {
+            final r = textRectFor(
+              x: edited.x,
+              y: edited.y,
+              text: edited.text ?? '',
+              fontSize: edited.size,
+            );
+            elements[i] = edited.copyWith(width: r.width, height: r.height);
+          }
           _changed();
           await animate();
           elements[i].progress = 1;

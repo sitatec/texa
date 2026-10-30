@@ -228,6 +228,90 @@
     "@muted": {
       "description": "Status pill when the microphone is muted."
     },
+    "working": "Working…",
+    "@working": {
+      "description": "Status pill while Texa is busy but not thinking, speaking or drawing a specific thing."
+    },
+    "writingText": "Writing text…",
+    "@writingText": {
+      "description": "Status pill while Texa writes text on the board."
+    },
+    "writingMath": "Writing math expression…",
+    "@writingMath": {
+      "description": "Status pill while Texa writes a math expression on the board."
+    },
+    "plottingFunction": "Plotting function…",
+    "@plottingFunction": {
+      "description": "Status pill while Texa plots a function on the board."
+    },
+    "drawingDiagram": "Drawing diagram…",
+    "@drawingDiagram": {
+      "description": "Status pill while Texa draws a diagram on the board."
+    },
+    "markingLandmarks": "Marking landmarks…",
+    "@markingLandmarks": {
+      "description": "Status pill while Texa marks landmark points on the board."
+    },
+    "editingElement": "Editing element…",
+    "@editingElement": {
+      "description": "Status pill while Texa edits a board element."
+    },
+    "removingElement": "Removing element…",
+    "@removingElement": {
+      "description": "Status pill while Texa removes a board element."
+    },
+    "pointing": "Pointing…",
+    "@pointing": {
+      "description": "Status pill while Texa points at something on the board."
+    },
+    "movingView": "Moving view…",
+    "@movingView": {
+      "description": "Status pill while Texa moves the board view."
+    },
+    "takingNotes": "Taking notes…",
+    "@takingNotes": {
+      "description": "Status pill while Texa quietly updates its notes or memory."
+    },
+    "searchingSessions": "Searching past sessions…",
+    "@searchingSessions": {
+      "description": "Status pill while Texa searches past session observations."
+    },
+    "wroteText": "Wrote text",
+    "@wroteText": {
+      "description": "History label for a write_text action."
+    },
+    "wroteMath": "Wrote math expression",
+    "@wroteMath": {
+      "description": "History label for a write_math action."
+    },
+    "plottedFunction": "Plotted function",
+    "@plottedFunction": {
+      "description": "History label for a plot_function action."
+    },
+    "drewDiagram": "Drew diagram",
+    "@drewDiagram": {
+      "description": "History label for a draw_svg action."
+    },
+    "markedLandmarks": "Marked landmarks",
+    "@markedLandmarks": {
+      "description": "History label for a mark_landmarks action."
+    },
+    "editedElement": "Edited element",
+    "@editedElement": {
+      "description": "History label for an edit_element action."
+    },
+    "removedElement": "Removed element",
+    "@removedElement": {
+      "description": "History label for a remove_element action."
+    },
+    "pointedAt": "Pointed at",
+    "@pointedAt": {
+      "description": "History label for a point_at action."
+    },
+    "movedView": "Moved view",
+    "@movedView": {
+      "description": "History label for a focus_viewport action."
+    },
     "headphonesTitle": "Headphones needed on Mac",
     "@headphonesTitle": {
       "description": "Title of the macOS headphones notice shown when a session starts."
@@ -391,6 +475,34 @@
     "playbackSection": "Playback",
     "@playbackSection": {
       "description": "Section heading for playback settings."
+    },
+    "voiceSection": "Tutor voice",
+    "@voiceSection": {
+      "description": "Section heading for the TTS voice engine settings."
+    },
+    "voiceKokoro": "Kokoro",
+    "@voiceKokoro": {
+      "description": "Name of the Kokoro TTS engine option."
+    },
+    "voiceKokoroDescription": "High quality, but may run slow on mobile and low-end devices.",
+    "@voiceKokoroDescription": {
+      "description": "Description of the Kokoro TTS engine option."
+    },
+    "voicePiper": "Piper",
+    "@voicePiper": {
+      "description": "Name of the Piper TTS engine option."
+    },
+    "voicePiperDescription": "Standard quality and uses fewer resources. Recommended for mobile.",
+    "@voicePiperDescription": {
+      "description": "Description of the Piper TTS engine option."
+    },
+    "voiceRecommended": "Recommended",
+    "@voiceRecommended": {
+      "description": "Badge marking the voice engine recommended for this device."
+    },
+    "voiceDownloadFailed": "Could not download/switch the voice. Please try again.",
+    "@voiceDownloadFailed": {
+      "description": "Error shown when downloading or switching the voice engine fails."
     },
     "dataSection": "Your data",
     "@dataSection": {

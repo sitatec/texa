@@ -3,14 +3,19 @@ import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
+import 'package:texa/features/study_session/speech/model_store.dart';
 
+import '../../../core/data/models.dart';
 import '../playback/wav_builder.dart';
 
 /// Setup handed to the worker isolate at spawn.
 typedef _WorkerSetup = ({
   SendPort reply,
-  String kokoroDir,
-  String languageCode,
+  TtsEngine engine,
+  String model,
+  String? voices,
+  String tokens,
+  String lexicon,
   bool debug,
 });
 
@@ -44,12 +49,15 @@ class TtsWorker {
   final Map<int, StreamController<Uint8List>> _pending = {};
   int _nextId = 0;
 
-  /// Spawns the worker and loads the Kokoro model from [kokoroDir].
+  /// Spawns the worker and loads the selected TTS engine's model.
   /// Returns null when TTS is unavailable (e.g. on web, where isolates
   /// do not exist, or when the model fails to load).
   static Future<TtsWorker?> start({
-    required String kokoroDir,
-    String languageCode = 'us-en',
+    required TtsEngine engine,
+    required String model,
+    String? voices,
+    required String tokens,
+    required String lexicon,
   }) async {
     final responses = ReceivePort();
     final errors = ReceivePort();
@@ -57,8 +65,11 @@ class TtsWorker {
     try {
       isolate = await Isolate.spawn(_entry, (
         reply: responses.sendPort,
-        kokoroDir: kokoroDir,
-        languageCode: languageCode,
+        engine: engine,
+        model: model,
+        voices: voices,
+        tokens: tokens,
+        lexicon: lexicon,
         debug: kDebugMode,
       ), onError: errors.sendPort);
     } catch (_) {
@@ -153,14 +164,24 @@ class TtsWorker {
       tts = sherpa.OfflineTts(
         sherpa.OfflineTtsConfig(
           model: sherpa.OfflineTtsModelConfig(
-            kokoro: sherpa.OfflineTtsKokoroModelConfig(
-              model: '${setup.kokoroDir}/model.int8.onnx',
-              voices: '${setup.kokoroDir}/voices.bin',
-              tokens: '${setup.kokoroDir}/tokens.txt',
-              lexicon: '${setup.kokoroDir}/lexicon-${setup.languageCode}.txt',
-            ),
-            numThreads: 4,
-            provider: "coreml",
+            kokoro: setup.engine == TtsEngine.kokoro
+                ? sherpa.OfflineTtsKokoroModelConfig(
+                    model: setup.model,
+                    voices: setup.voices ?? '',
+                    tokens: setup.tokens,
+                    lexicon: setup.lexicon,
+                  )
+                : const sherpa.OfflineTtsKokoroModelConfig(),
+            vits: setup.engine == TtsEngine.piper
+                ? sherpa.OfflineTtsVitsModelConfig(
+                    model: setup.model,
+                    tokens: setup.tokens,
+                    lexicon: setup.lexicon,
+                  )
+                : const sherpa.OfflineTtsVitsModelConfig(),
+            numThreads: setup.engine == TtsEngine.kokoro
+                ? getOptimalThreads()
+                : 1,
             debug: setup.debug,
           ),
           // One sentence per batch, so the callback below delivers
@@ -179,7 +200,7 @@ class TtsWorker {
       try {
         tts.generateWithCallback(
           text: text,
-          sid: 0, // 30 for french
+          sid: setup.engine == TtsEngine.piper ? 0 : 3, // 30 for french
           callback: (samples) {
             if (samples.isNotEmpty) {
               setup.reply.send((id, buildWav(samples, tts.sampleRate)));

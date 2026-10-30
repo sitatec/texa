@@ -8,7 +8,6 @@ import 'package:http/http.dart' as http;
 import '../../../core/constants.dart';
 import '../../../core/errors.dart';
 import '../../../core/data/models.dart';
-import '../board/board_models.dart';
 import 'ai_actions.dart';
 import 'system_prompt.dart';
 
@@ -21,15 +20,66 @@ class AiTextDelta extends AiEvent {
 }
 
 class AiToolCallComplete extends AiEvent {
-  AiToolCallComplete(this.name, this.args);
+  AiToolCallComplete(this.name, this.args, {this.callId = ''});
   final String name;
   final Map<String, dynamic> args;
+
+  /// The Responses API `call_id` this call must be answered with. It is
+  /// not the stream item id; a `function_call_output` sent back with any
+  /// other id is rejected by the API.
+  final String callId;
 }
 
 class AiStreamDone extends AiEvent {
-  AiStreamDone(this.raw, this.fullText);
+  AiStreamDone(this.raw, this.fullText, {this.responseId});
   final Map<String, dynamic> raw;
   final String fullText;
+
+  /// Id of the final stored response of this turn. Persisted in the AI
+  /// message payload (inside [raw] as `responseId`) so the next turn can
+  /// chain onto it with `previous_response_id` instead of replaying the
+  /// whole history.
+  final String? responseId;
+}
+
+/// Outcome of performing one tool call, reported back to the model as a
+/// plain-text `function_call_output` (never multimodal content).
+class AiToolResult {
+  const AiToolResult._(this.success, this.output);
+  const AiToolResult.success([String output = '']) : this._(true, output);
+  const AiToolResult.failure(String output) : this._(false, output);
+
+  final bool success;
+  final String output;
+
+  /// Wire shape of the output: a small JSON status envelope so the model
+  /// can tell a performed action from a failed one at a glance.
+  String get wireOutput => jsonEncode({
+    'status': success ? 'success' : 'error',
+    if (output.isNotEmpty) 'detail': output,
+  });
+}
+
+/// Performs one tool call the model asked for and reports its outcome.
+/// Supplied by the session controller, which owns the board/playback the
+/// tools act on; [AiClient] awaits it inside the agentic loop before the
+/// result is sent back to the model.
+typedef AiToolExecutor = Future<AiToolResult> Function(
+  String name,
+  Map<String, dynamic> args,
+);
+
+/// Internal terminal event of one streamed response inside the agentic
+/// loop; never leaves [AiClient.streamTurn].
+class _ResponseRound extends AiEvent {
+  _ResponseRound({
+    required this.responseId,
+    required this.text,
+    required this.calls,
+  });
+  final String? responseId;
+  final String text;
+  final List<({String callId, String name, Map<String, dynamic> args})> calls;
 }
 
 /// The media family of an [AiUpload], decided from its MIME type (falling
@@ -139,6 +189,19 @@ class AiClient {
 
   void close() => _client.close();
 
+  /// The id of the most recent stored response in [history], or null when
+  /// no AI message carries one (a brand-new or pre-`store` session). The
+  /// id only ever lives in the saved AI messages' payloads; it is read
+  /// back from there so it survives restarts with the rest of the history.
+  static String? latestResponseId(List<ChatMessage> history) {
+    for (final m in history.reversed) {
+      if (m.role != 'ai') continue;
+      final id = m.payload['responseId'];
+      if (id is String && id.isNotEmpty) return id;
+    }
+    return null;
+  }
+
   /// Minimal authenticated request used by Test connection.
   Future<void> testConnection() async {
     try {
@@ -172,8 +235,8 @@ class AiClient {
   /// (base64 + format) and `input_file` (filename + base64 data URI).
   ({String instructions, List<Map<String, dynamic>> input}) _requestInput({
     required List<ChatMessage> history,
-    required Map<String, AiElementInfo> registry,
-    String? videoBase64,
+    required String videoBase64,
+    bool includeHistory = true,
     Map<String, dynamic>? interruptionContext,
     String studentMemory = '',
     List<SessionObservation> recentObservations = const [],
@@ -204,41 +267,59 @@ class AiClient {
     }
 
     final input = <Map<String, dynamic>>[];
-    for (final m in history) {
-      if (m.role == 'ai') {
-        final p = m.payload;
-        final text = (p['text'] as String? ?? '').trim();
-        if (text.isNotEmpty) {
-          input.add({
-            'role': 'assistant',
-            'content': [
-              {'type': 'output_text', 'text': text},
-            ],
-          });
-        }
-        final calls = p['toolCalls'];
-        if (calls is List) {
-          for (final c in calls) {
-            final cm = c as Map<String, dynamic>;
+    // With a stored previous response the server already holds the whole
+    // conversation, so only this turn's new input is sent. The full
+    // replay below is only the bootstrap for sessions that have no
+    // stored response id yet (new or legacy sessions).
+    if (includeHistory) {
+      for (final m in history) {
+        if (m.role == 'ai') {
+          final p = m.payload;
+          final text = (p['text'] as String? ?? '').trim();
+          if (text.isNotEmpty) {
             input.add({
-              'type': 'function_call',
-              'call_id': cm['id'] ?? 'call_${cm['name']}',
-              'name': cm['name'],
-              'arguments': jsonEncode(cm['args'] ?? {}),
+              'role': 'assistant',
+              'content': [
+                {'type': 'output_text', 'text': text},
+              ],
             });
           }
+          final calls = p['toolCalls'];
+          if (calls is List) {
+            for (var i = 0; i < calls.length; i++) {
+              final cm = calls[i] as Map<String, dynamic>;
+              // Every replayed function_call must be answered by a
+              // matching function_call_output, or the API rejects the
+              // whole request ("No tool output found for function call
+              // ..."). Legacy messages saved no result, so a stored
+              // outcome is replayed when present and a plain success is
+              // synthesised otherwise - the action did happen on the
+              // board back then. Call ids also have to be unique, hence
+              // the index on the synthesised fallback.
+              final callId = cm['id'] as String? ?? 'call_${cm['name']}_$i';
+              input.add({
+                'type': 'function_call',
+                'call_id': callId,
+                'name': cm['name'],
+                'arguments': jsonEncode(cm['args'] ?? {}),
+              });
+              final storedOutput = cm['output'];
+              input.add({
+                'type': 'function_call_output',
+                'call_id': callId,
+                'output': storedOutput is String && storedOutput.isNotEmpty
+                    ? storedOutput
+                    : const AiToolResult.success().wireOutput,
+              });
+            }
+          }
+        } else if ((m.payload['text'] as String?)?.isNotEmpty == true) {
+          input.add({'role': 'user', 'content': m.payload['text'] as String});
         }
-      } else if ((m.payload['text'] as String?)?.isNotEmpty == true) {
-        input.add({'role': 'user', 'content': m.payload['text'] as String});
       }
     }
 
-    final regText = registry.isEmpty
-        ? 'You have not drawn anything yet in this session.'
-        : 'Your existing board elements (id, type, x, y, width, height): ${registry.values.map((e) => '${e.id} ${e.kind} ${e.rect.left.round()},${e.rect.top.round()} ${e.rect.width.round()}x${e.rect.height.round()}').join('; ')}';
-    final context = StringBuffer(
-      'Board: ${boardWidth.toInt()}x${boardHeight.toInt()}. $regText',
-    );
+    final context = StringBuffer();
     if (interruptionContext != null) {
       context.write(
         ' Interruption context: ${jsonEncode(interruptionContext)}',
@@ -260,7 +341,8 @@ class AiClient {
     }
 
     final parts = <Map<String, dynamic>>[
-      {'type': 'input_text', 'text': context.toString()},
+      if (context.isNotEmpty)
+        {'type': 'input_text', 'text': context.toString()},
     ];
     for (final u in uploads.where((u) => u.hasBase64 && !u.hasText)) {
       switch (u.kind) {
@@ -281,24 +363,34 @@ class AiClient {
           });
       }
     }
-    if (videoBase64 != null) {
-      // The board turn-video is a video, not an image.
-      parts.add({
-        'type': 'input_video',
-        'video_url': 'data:video/mp4;base64,$videoBase64',
-      });
-    }
+    // The board turn-video is a video, not an image.
+    parts.add({
+      'type': 'input_video',
+      'video_url': 'data:video/mp4;base64,$videoBase64',
+    });
     input.add({'role': 'user', 'content': parts});
     return (instructions: instructions.toString(), input: input);
   }
 
-  /// Streams one turn: text deltas and completed tool calls are emitted as
-  /// soon as they arrive; [AiStreamDone] carries the full raw reply for saving.
+  /// Streams one turn, running the agentic tool loop when
+  /// [executeToolCall] is given.
+  ///
+  /// Every request is sent with `store: true`. When a previous stored
+  /// response is known (passed explicitly or found in the saved AI
+  /// messages in [history]) only this turn's new input plus
+  /// `previous_response_id` is sent - the history itself is never
+  /// replayed. Each response that asks for tool calls has every call
+  /// performed through [executeToolCall] and its outcome sent straight
+  /// back as a `function_call_output` chained on that response's id, so
+  /// the model can keep calling tools step by step (draw, look at the
+  /// result, explain, draw more) until it answers with no further calls.
+  /// Without an executor the turn stays a single request, as before.
+  /// [AiStreamDone] is emitted once, at the very end, and carries the
+  /// final response id for the caller to persist with the AI message.
   Stream<AiEvent> streamTurn({
     required String model,
     required List<ChatMessage> history,
-    required Map<String, AiElementInfo> registry,
-    String? videoBase64,
+    required String videoBase64,
     Map<String, dynamic>? interruptionContext,
     String studentMemory = '',
     List<SessionObservation> recentObservations = const [],
@@ -306,10 +398,13 @@ class AiClient {
     List<AiUpload> uploads = const [],
     String? extraContext,
     String? reasoningEffort,
+    String? previousResponseId,
+    AiToolExecutor? executeToolCall,
+    int maxToolRounds = 10,
   }) async* {
+    var previousId = previousResponseId ?? latestResponseId(history);
     final request = _requestInput(
       history: history,
-      registry: registry,
       videoBase64: videoBase64,
       interruptionContext: interruptionContext,
       studentMemory: studentMemory,
@@ -317,21 +412,125 @@ class AiClient {
       currentObservation: currentObservation,
       uploads: uploads,
       extraContext: extraContext,
+      includeHistory: previousId == null,
     );
+
+    final fullText = StringBuffer();
+    final allCalls = <Map<String, dynamic>>[];
+    final responseIds = <String>[];
+    List<Map<String, dynamic>> nextInput = request.input;
+    var wrapUpNext = false;
+
+    for (var round = 0; ; round++) {
+      final allowTools = !wrapUpNext;
+      _ResponseRound? completed;
+      await for (final event in _streamOneResponse(
+        model: model,
+        instructions: request.instructions,
+        input: nextInput,
+        previousResponseId: previousId,
+        reasoningEffort: reasoningEffort,
+        allowTools: allowTools,
+      )) {
+        if (event is _ResponseRound) {
+          completed = event;
+        } else {
+          yield event;
+        }
+      }
+      final result = completed!;
+      if (result.responseId != null && result.responseId!.isNotEmpty) {
+        previousId = result.responseId;
+        responseIds.add(result.responseId!);
+      }
+      fullText.write(result.text);
+      if (result.calls.isEmpty || wrapUpNext) break;
+
+      final roundCalls = <Map<String, dynamic>>[];
+      for (final call in result.calls) {
+        final entry = <String, dynamic>{
+          if (call.callId.isNotEmpty) 'id': call.callId,
+          'name': call.name,
+          'args': call.args,
+        };
+        roundCalls.add(entry);
+        allCalls.add(entry);
+      }
+      // No executor: keep the old single-request behaviour. The calls
+      // were still streamed above so the caller can perform them; only
+      // the chained follow-up request is skipped.
+      if (executeToolCall == null) break;
+
+      // Perform every call in the order the model issued it and answer
+      // each one before the next request goes out. Outcomes are plain
+      // text only - no board screenshots or other multimodal payloads.
+      final outputs = <Map<String, dynamic>>[];
+      for (final call in result.calls) {
+        AiToolResult outcome;
+        try {
+          outcome = await executeToolCall(call.name, call.args);
+        } catch (e) {
+          outcome = AiToolResult.failure('The action failed: $e');
+        }
+        final entry = roundCalls.firstWhere(
+          (c) => call.callId.isNotEmpty
+              ? c['id'] == call.callId
+              : c['name'] == call.name && !c.containsKey('output'),
+        );
+        entry['status'] = outcome.success ? 'success' : 'error';
+        entry['output'] = outcome.wireOutput;
+        outputs.add({
+          'type': 'function_call_output',
+          'call_id': call.callId.isNotEmpty ? call.callId : 'call_${call.name}',
+          'output': outcome.wireOutput,
+        });
+      }
+      // Safety valve: after too many tool rounds, one last request with
+      // tools disabled lets the model wrap up in words instead of
+      // looping (or leaving its last calls unanswered) forever.
+      if (round >= maxToolRounds) wrapUpNext = true;
+      nextInput = outputs;
+    }
+
+    final raw = <String, dynamic>{
+      'text': fullText.toString(),
+      'toolCalls': allCalls,
+      'responseId': previousId,
+      'responseIds': responseIds,
+    };
+    yield AiStreamDone(raw, fullText.toString(), responseId: previousId);
+  }
+
+  /// Streams a single Responses API request (`store: true`, chained on
+  /// [previousResponseId] when given) and finishes with a
+  /// [_ResponseRound] describing the completed response: its id, its
+  /// full text and every function call it asked for, with real call ids.
+  Stream<AiEvent> _streamOneResponse({
+    required String model,
+    required String instructions,
+    required List<Map<String, dynamic>> input,
+    required String? previousResponseId,
+    required String? reasoningEffort,
+    required bool allowTools,
+  }) async* {
     final fullText = StringBuffer();
     final argBuffers = <String, StringBuffer>{};
     final callNames = <String, String>{};
+    final callIds = <String, String>{};
     final callOrder = <String>[];
-    final completedCalls = <({String name, Map<String, dynamic> args})>[];
+    final completedCalls =
+        <({String callId, String name, Map<String, dynamic> args})>[];
     final emittedTools = <String>{};
+    String? responseId;
     var sawEvent = false;
 
-    void registerCall(String key, String? name) {
+    void registerCall(String key, String? name, String? callId) {
       if (!argBuffers.containsKey(key)) {
         argBuffers[key] = StringBuffer();
         callOrder.add(key);
       }
       if (name != null && name.isNotEmpty) callNames[key] = name;
+      if (callId != null && callId.isNotEmpty) callIds[key] = callId;
     }
 
     AiToolCallComplete? finishCall(String key) {
@@ -340,8 +539,17 @@ class AiClient {
       if (name.isEmpty) return null;
       emittedTools.add(key);
       final args = decodeArgs(argBuffers[key]?.toString() ?? '');
-      completedCalls.add((name: name, args: args));
-      return AiToolCallComplete(name, args);
+      final callId = callIds[key] ?? '';
+      completedCalls.add((callId: callId, name: name, args: args));
+      return AiToolCallComplete(name, args, callId: callId);
+    }
+
+    void captureResponseId(dynamic event) {
+      final response = event is Map ? event['response'] : null;
+      if (response is Map) {
+        final id = response['id'];
+        if (id is String && id.isNotEmpty) responseId = id;
+      }
     }
 
     try {
@@ -349,10 +557,12 @@ class AiClient {
           in _openAi.responses
               .createStream(
                 model: model,
-                instructions: request.instructions,
-                input: request.input,
+                instructions: instructions,
+                input: input,
+                store: true,
+                previousResponseId: previousResponseId,
                 tools: toolSchemas(),
-                toolChoice: 'auto',
+                toolChoice: allowTools ? 'auto' : 'none',
                 reasoning: reasoningEffort == null
                     ? null
                     : {'effort': reasoningEffort},
@@ -361,6 +571,8 @@ class AiClient {
               .timeout(const Duration(seconds: responseTimeoutSeconds))) {
         sawEvent = true;
         switch (event['type']) {
+          case 'response.created' || 'response.in_progress':
+            captureResponseId(event);
           case 'response.output_text.delta':
             final delta = event['delta'];
             if (delta is String && delta.isNotEmpty) {
@@ -370,13 +582,17 @@ class AiClient {
           case 'response.function_call_arguments.delta':
             final key = (event['item_id'] ?? event['output_index'] ?? '')
                 .toString();
-            registerCall(key, null);
+            registerCall(key, null, event['call_id'] as String?);
             final delta = event['delta'];
             if (delta is String) argBuffers[key]!.write(delta);
           case 'response.function_call_arguments.done':
             final key = (event['item_id'] ?? event['output_index'] ?? '')
                 .toString();
-            registerCall(key, event['name'] as String?);
+            registerCall(
+              key,
+              event['name'] as String?,
+              event['call_id'] as String?,
+            );
             final args = event['arguments'];
             if (args is String && args.isNotEmpty) {
               argBuffers[key]
@@ -389,7 +605,11 @@ class AiClient {
             final item = event['item'];
             if (item is Map && item['type'] == 'function_call') {
               final key = (item['id'] ?? item['call_id'] ?? '').toString();
-              registerCall(key, item['name'] as String?);
+              registerCall(
+                key,
+                item['name'] as String?,
+                item['call_id'] as String?,
+              );
               final args = item['arguments'];
               if (args is String && args.isNotEmpty) {
                 argBuffers[key]
@@ -400,6 +620,7 @@ class AiClient {
               if (done != null) yield done;
             }
           case 'response.completed':
+            captureResponseId(event);
             // Fallback: emit any function calls the terminal event carries
             // that were not already completed mid-stream.
             final response = event['response'];
@@ -408,7 +629,11 @@ class AiClient {
               for (final item in output) {
                 if (item is Map && item['type'] == 'function_call') {
                   final key = (item['id'] ?? item['call_id'] ?? '').toString();
-                  registerCall(key, item['name'] as String?);
+                  registerCall(
+                    key,
+                    item['name'] as String?,
+                    item['call_id'] as String?,
+                  );
                   final args = item['arguments'];
                   if (args is String && args.isNotEmpty) {
                     argBuffers[key]
@@ -465,12 +690,10 @@ class AiClient {
       final done = finishCall(key);
       if (done != null) yield done;
     }
-    final raw = <String, dynamic>{
-      'text': fullText.toString(),
-      'toolCalls': completedCalls
-          .map((c) => {'name': c.name, 'args': c.args})
-          .toList(),
-    };
-    yield AiStreamDone(raw, fullText.toString());
+    yield _ResponseRound(
+      responseId: responseId,
+      text: fullText.toString(),
+      calls: completedCalls,
+    );
   }
 }

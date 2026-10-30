@@ -210,14 +210,11 @@ class _SetupScreenState extends State<SetupScreen> {
             );
           });
         }
-      });
+      }, engine: widget.app.settings.ttsEngineOrDefault);
       final vadOk = await widget.app.speech.verifyVad(
         await widget.app.provisioning.vadPath,
       );
-      final ttsOk = await widget.app.speech.initTts(
-        await widget.app.provisioning.kokoroDir,
-      );
-      widget.app.speechReady = ttsOk;
+      final ttsOk = await widget.app.tryInitSpeech();
       if (!vadOk || !ttsOk) {
         throw StateError(
           'Speech models downloaded but did not initialise on this device.',

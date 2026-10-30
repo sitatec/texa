@@ -13,6 +13,7 @@ import 'ai/ai_client.dart';
 import 'board/board_models.dart';
 import 'board/board_widget.dart';
 import 'file_attachment/input_file_widget.dart';
+import 'session_history/session_history_entry.dart';
 import 'session_controller.dart';
 
 /// The board-first tutoring session screen.
@@ -37,7 +38,6 @@ class _SessionScreenState extends State<SessionScreen> {
   static bool _macHeadphonesNoticeShown = false;
   bool _strokeUndoPushed = false;
   bool _boardPointerActive = false;
-  bool _eraseUndoPushed = false;
   List<TexaLocalFile> _attachments = [];
 
   /// True while [_attachments] are staged on the controller for the next
@@ -135,13 +135,22 @@ class _SessionScreenState extends State<SessionScreen> {
     setState(() {});
   }
 
-  String _statusText() => switch (c.statusKey) {
-    'capturing' => tr.session.capturing,
-    'thinking' => tr.session.thinking,
-    'speaking' => tr.session.speaking,
-    'muted' => tr.session.muted,
-    _ => tr.session.listening,
-  };
+  String _statusText() {
+    final key = c.statusKey;
+    if (key.startsWith('action:')) {
+      // A specific thing is being done on the board right now.
+      return actionStatusLabel(key.substring('action:'.length)) ??
+          tr.session.working;
+    }
+    return switch (key) {
+      'capturing' => tr.session.capturing,
+      'thinking' => tr.session.thinking,
+      'speaking' => tr.session.speaking,
+      'working' => tr.session.working,
+      'muted' => tr.session.muted,
+      _ => tr.session.listening,
+    };
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -237,16 +246,9 @@ class _SessionScreenState extends State<SessionScreen> {
                             c.board.finishStroke();
                             unawaited(c.flushSave());
                           },
-                          onErase: (p) {
-                            if (!_eraseUndoPushed) {
-                              c.board.beginStudentChange();
-                              _eraseUndoPushed = true;
-                            }
-                            c.board.eraseAt(p, _eraserWidth / 2);
-                            Future<void>.microtask(
-                              () => _eraseUndoPushed = false,
-                            );
-                          },
+                          onEraseStart: c.board.beginErase,
+                          onEraseEnd: c.board.endErase,
+                          onErase: (p) => c.board.eraseAt(p, _eraserWidth / 2),
                         ),
                       );
                     },
@@ -274,8 +276,9 @@ class _SessionScreenState extends State<SessionScreen> {
                             height: 6,
                             decoration: BoxDecoration(
                               color:
-                                  c.state == TurnState.capturing ||
-                                      c.state == TurnState.speaking
+                                  c.statusKey == 'capturing' ||
+                                      c.statusKey == 'speaking' ||
+                                      c.statusKey.startsWith('action:')
                                   ? texaGreen
                                   : texaYellow,
                               shape: BoxShape.circle,
@@ -297,7 +300,7 @@ class _SessionScreenState extends State<SessionScreen> {
                 ),
                 Positioned(left: 10, top: 64, child: _toolbar()),
                 Positioned(right: 10, top: 64, child: _overlays(compact)),
-                if (c.state == TurnState.speaking)
+                if (c.replyActive)
                   Positioned(
                     right: 8,
                     bottom: 8,
@@ -727,27 +730,9 @@ class _SessionScreenState extends State<SessionScreen> {
           }
           return ListView(
             padding: const EdgeInsets.all(16),
-            children: c.messages.map((m) {
-              final text = m.role == 'ai'
-                  ? (m.payload['text'] as String? ?? '')
-                  : (m.payload['text'] as String? ?? '');
-              final tools = m.payload['toolCalls'];
-              return ListTile(
-                leading: Icon(
-                  m.role == 'ai'
-                      ? Symbols.auto_awesome
-                      : Symbols.person_outline,
-                ),
-                title: Text(m.role == 'ai' ? 'Texa' : 'You'),
-                subtitle: Text(
-                  [
-                    if (text.isNotEmpty) text,
-                    if (tools is List && tools.isNotEmpty)
-                      tools.map((t) => (t as Map)['name']).join(', '),
-                  ].join('\n'),
-                ),
-              );
-            }).toList(),
+            children: c.messages
+                .map((m) => SessionHistoryEntry(message: m))
+                .toList(),
           );
         },
       ),

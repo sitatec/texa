@@ -5,6 +5,8 @@ import 'package:material_symbols_icons/symbols.dart';
 import 'package:flutter/services.dart';
 
 import '../../app_controller.dart';
+import '../../core/constants.dart';
+import '../../core/data/models.dart';
 import '../../core/errors.dart';
 import '../../core/theme.dart';
 import '../../generated/i18n/translations.g.dart';
@@ -28,6 +30,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _testing = false;
   String? _message;
   String _logs = '';
+  bool _voiceSwitching = false;
+  double _voiceProgress = 0;
+  String? _voiceProgressLabel;
   @override
   void initState() {
     super.initState();
@@ -113,6 +118,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     setState(() {});
                   },
                 ),
+                const SizedBox(height: 8),
+                Text(
+                  tr.settings.voiceSection,
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                RadioGroup<TtsEngine>(
+                  groupValue: widget.app.settings.ttsEngineOrDefault,
+                  onChanged: _voiceSwitching ? (_) {} : _changeVoice,
+                  child: Column(
+                    children: [
+                      RadioListTile<TtsEngine>(
+                        value: TtsEngine.kokoro,
+                        title: _voiceTitle(
+                          tr.settings.voiceKokoro,
+                          recommended: !isMobile,
+                        ),
+                        subtitle: Text(tr.settings.voiceKokoroDescription),
+                      ),
+                      RadioListTile<TtsEngine>(
+                        value: TtsEngine.piper,
+                        title: _voiceTitle(
+                          tr.settings.voicePiper,
+                          recommended: isMobile,
+                        ),
+                        subtitle: Text(tr.settings.voicePiperDescription),
+                      ),
+                    ],
+                  ),
+                ),
+                if (_voiceSwitching) ...[
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(value: _voiceProgress),
+                  if (_voiceProgressLabel != null) ...[
+                    const SizedBox(height: 6),
+                    Text(_voiceProgressLabel!),
+                  ],
+                ],
                 const Divider(height: 36),
                 Text(
                   tr.settings.memorySection,
@@ -229,6 +271,62 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(tr.settings.saved)));
     }
+  }
+
+  Widget _voiceTitle(String name, {required bool recommended}) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(name),
+        if (recommended) ...[
+          const SizedBox(width: 8),
+          Chip(
+            label: Text(tr.settings.voiceRecommended),
+            visualDensity: VisualDensity.compact,
+          ),
+        ],
+      ],
+    );
+  }
+
+  Future<void> _changeVoice(TtsEngine? engine) async {
+    if (engine == null ||
+        _voiceSwitching ||
+        engine == widget.app.settings.ttsEngineOrDefault) {
+      return;
+    }
+    setState(() {
+      _voiceSwitching = true;
+      _voiceProgress = 0;
+      _voiceProgressLabel = null;
+    });
+    try {
+      await widget.app.changeTtsEngine(
+        engine,
+        onProgress: (label, f) {
+          if (mounted) {
+            setState(() {
+              _voiceProgress = f;
+              _voiceProgressLabel = tr.setup.downloading(
+                name: label,
+                percent: (f * 100).round().toString(),
+              );
+            });
+          }
+        },
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(tr.settings.saved)));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(tr.settings.voiceDownloadFailed)),
+        );
+      }
+    }
+    if (mounted) setState(() => _voiceSwitching = false);
   }
 
   Future<void> _wipe() async {

@@ -1,5 +1,10 @@
 import 'dart:convert';
 
+import '../constants.dart';
+
+/// On-device TTS voice engine selectable in Settings.
+enum TtsEngine { kokoro, piper }
+
 /// App settings persisted locally.
 class AppSettings {
   const AppSettings({
@@ -7,32 +12,48 @@ class AppSettings {
     this.captionsDefault = true,
     this.micPermissionDenied = false,
     this.setupComplete = false,
+    this.ttsEngine,
   });
   final String apiKey;
   final bool captionsDefault;
   final bool micPermissionDenied;
   final bool setupComplete;
+
+  /// Voice engine explicitly chosen by the user, or null when they
+  /// never changed it (then [ttsEngineOrDefault] applies).
+  final TtsEngine? ttsEngine;
+
+  /// The voice engine to actually use: the user's choice, otherwise
+  /// the platform recommendation — Piper on mobile (native & web),
+  /// Kokoro on desktop (native & web).
+  TtsEngine get ttsEngineOrDefault =>
+      ttsEngine ?? (isMobile ? TtsEngine.piper : TtsEngine.kokoro);
+
   AppSettings copyWith({
     String? apiKey,
     bool? captionsDefault,
     bool? micPermissionDenied,
     bool? setupComplete,
+    TtsEngine? ttsEngine,
   }) => AppSettings(
     apiKey: apiKey ?? this.apiKey,
     captionsDefault: captionsDefault ?? this.captionsDefault,
     micPermissionDenied: micPermissionDenied ?? this.micPermissionDenied,
     setupComplete: setupComplete ?? this.setupComplete,
+    ttsEngine: ttsEngine ?? this.ttsEngine,
   );
   Map<String, Object?> toJson() => {
     'captionsDefault': captionsDefault,
     'micPermissionDenied': micPermissionDenied,
     'setupComplete': setupComplete,
+    'ttsEngine': ttsEngine?.name,
   };
   factory AppSettings.fromJson(Map<String, dynamic> j) => AppSettings(
     apiKey: j['apiKey'] as String? ?? '',
     captionsDefault: j['captionsDefault'] as bool? ?? true,
     micPermissionDenied: j['micPermissionDenied'] as bool? ?? false,
     setupComplete: j['setupComplete'] as bool? ?? false,
+    ttsEngine: TtsEngine.values.asNameMap()[j['ttsEngine']],
   );
 }
 

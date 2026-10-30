@@ -46,9 +46,8 @@ void main() {
   }) => client.streamTurn(
     model: 'test-model',
     history: history,
-    registry: const {},
     uploads: uploads,
-    videoBase64: videoBase64,
+    videoBase64: videoBase64 ?? '',
   );
 
   group('upload request parts', () {
@@ -177,11 +176,18 @@ void main() {
         ]);
         expect(input[1], {
           'type': 'function_call',
-          'call_id': 'call_write_text',
+          'call_id': 'call_write_text_0',
           'name': 'write_text',
           'arguments': '{"element_id":"title"}',
         });
-        expect((input[2] as Map)['content'], 'thanks');
+        // Every replayed call is answered, or the API rejects the turn
+        // with "No tool output found for function call ...".
+        expect(input[2], {
+          'type': 'function_call_output',
+          'call_id': 'call_write_text_0',
+          'output': '{"status":"success"}',
+        });
+        expect((input[3] as Map)['content'], 'thanks');
       },
     );
   });
@@ -280,6 +286,188 @@ void main() {
           ),
         ),
       );
+    });
+  });
+
+  group('stored responses and the agentic tool loop', () {
+    String evt(Map<String, dynamic> e) => 'data: ${jsonEncode(e)}\n\n';
+
+    /// Mock transport that answers POSTs in order and records bodies.
+    ({MockClient client, List<Map<String, dynamic>> bodies}) sequence(
+      List<String> responses,
+    ) {
+      final bodies = <Map<String, dynamic>>[];
+      var postCount = 0;
+      final client = MockClient((request) async {
+        if (request.method == 'POST') {
+          bodies.add(jsonDecode(request.body) as Map<String, dynamic>);
+          final sse = responses[postCount.clamp(0, responses.length - 1)];
+          postCount++;
+          return http.Response(
+            sse,
+            200,
+            headers: {'content-type': 'text/event-stream'},
+          );
+        }
+        return http.Response('{"object":"list","data":[]}', 200);
+      });
+      return (client: client, bodies: bodies);
+    }
+
+    String toolRound() => [
+      evt({
+        'type': 'response.created',
+        'response': {'id': 'resp_1'},
+      }),
+      evt({
+        'type': 'response.output_item.done',
+        'item': {
+          'type': 'function_call',
+          'id': 'fc1',
+          'call_id': 'call_write_math',
+          'name': 'write_math',
+          'arguments': '{"latex":"x^2"}',
+        },
+      }),
+      evt({
+        'type': 'response.completed',
+        'response': {'id': 'resp_1', 'output': []},
+      }),
+      'data: [DONE]\n\n',
+    ].join();
+
+    String textRound(String id, String text) => [
+      evt({'type': 'response.output_text.delta', 'delta': text}),
+      evt({
+        'type': 'response.completed',
+        'response': {'id': id, 'output': []},
+      }),
+      'data: [DONE]\n\n',
+    ].join();
+
+    test('sends only previous_response_id + new input when stored', () async {
+      final h = sequence([textRound('resp_9', 'hi')]);
+      final client = AiClient('key', client: h.client);
+      await turn(
+        client,
+        history: [
+          message('ai', {
+            'text': 'Earlier reply',
+            'responseId': 'resp_8',
+            'toolCalls': [
+              {'id': 'call_old', 'name': 'write_text', 'args': {}},
+            ],
+          }),
+          message('user', {'text': 'earlier question'}),
+        ],
+      ).toList();
+
+      expect(h.bodies, hasLength(1));
+      final body = h.bodies.single;
+      expect(body['store'], isTrue);
+      expect(body['previous_response_id'], 'resp_8');
+      // No history replay: the single input item is this turn's context.
+      final input = body['input'] as List;
+      expect(input, hasLength(1));
+      expect((input.single as Map)['role'], 'user');
+      // The new response id is surfaced for the caller to persist.
+      final done = await turn(
+        AiClient('key', client: sequence([textRound('resp_9', 'hi')]).client),
+        history: [
+          message('ai', {'text': 'x', 'responseId': 'resp_8'}),
+        ],
+      ).toList().then((e) => e.last);
+      expect((done as AiStreamDone).responseId, 'resp_9');
+    });
+
+    test('tool results are sent back and the loop continues', () async {
+      final h = sequence([toolRound(), textRound('resp_2', 'Done')]);
+      final executed = <String>[];
+      final events = await AiClient('key', client: h.client)
+          .streamTurn(
+            videoBase64: '',
+            model: 'test-model',
+            history: const [],
+            executeToolCall: (name, args) async {
+              executed.add(name);
+              return const AiToolResult.success('write_math performed.');
+            },
+          )
+          .toList();
+
+      expect(executed, ['write_math']);
+      expect(h.bodies, hasLength(2));
+      final followUp = h.bodies[1];
+      expect(followUp['store'], isTrue);
+      expect(followUp['previous_response_id'], 'resp_1');
+      expect(followUp['input'], [
+        {
+          'type': 'function_call_output',
+          'call_id': 'call_write_math',
+          'output': '{"status":"success","detail":"write_math performed."}',
+        },
+      ]);
+      expect(
+        events.whereType<AiToolCallComplete>().single.callId,
+        'call_write_math',
+      );
+      final done = events.last as AiStreamDone;
+      expect(done.fullText, 'Done');
+      expect(done.responseId, 'resp_2');
+      expect(done.raw['responseId'], 'resp_2');
+      final savedCall = (done.raw['toolCalls'] as List).single as Map;
+      expect(savedCall['id'], 'call_write_math');
+      expect(savedCall['status'], 'success');
+      expect(savedCall['output'], contains('write_math performed.'));
+    });
+
+    test(
+      'a failing tool is reported as an error and the loop continues',
+      () async {
+        final h = sequence([toolRound(), textRound('resp_2', 'Recovered')]);
+        final events = await AiClient('key', client: h.client)
+            .streamTurn(
+              videoBase64: '',
+              model: 'test-model',
+              history: const [],
+              executeToolCall: (name, args) async =>
+                  throw StateError('no such element'),
+            )
+            .toList();
+
+        final followUp = h.bodies[1];
+        final output =
+            ((followUp['input'] as List).single as Map)['output'] as String;
+        expect(output, contains('"status":"error"'));
+        expect(output, contains('no such element'));
+        expect((events.last as AiStreamDone).fullText, 'Recovered');
+      },
+    );
+
+    test('sequential rounds keep chaining on the newest response id', () async {
+      final h = sequence([
+        toolRound(),
+        toolRound().replaceAll('resp_1', 'resp_2'),
+        textRound('resp_3', 'All steps done'),
+      ]);
+      var calls = 0;
+      final events = await AiClient('key', client: h.client)
+          .streamTurn(
+            videoBase64: '',
+            model: 'test-model',
+            history: const [],
+            executeToolCall: (name, args) async {
+              calls++;
+              return AiToolResult.success('step $calls done');
+            },
+          )
+          .toList();
+
+      expect(calls, 2);
+      expect(h.bodies, hasLength(3));
+      expect(h.bodies[1]['previous_response_id'], 'resp_1');
+      expect(h.bodies[2]['previous_response_id'], 'resp_2');
+      expect((events.last as AiStreamDone).responseId, 'resp_3');
     });
   });
 

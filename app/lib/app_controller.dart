@@ -23,23 +23,48 @@ class AppController extends ChangeNotifier {
     await tryInitSpeech();
   }
 
-  /// Initialises on-device speech when its models are already provisioned.
-  Future<void> tryInitSpeech() async {
+  /// Initialises on-device speech when the selected voice engine's
+  /// models are already provisioned. Returns whether TTS is ready.
+  Future<bool> tryInitSpeech() async {
     try {
-      if (await provisioning.isReady) {
-        speechReady = await speech.initTts(await provisioning.kokoroDir);
+      final engine = settings.ttsEngineOrDefault;
+      speechReady = false;
+      if (await provisioning.isReadyFor(engine)) {
+        final paths = await provisioning.ttsPathsFor(engine);
+        speechReady = await speech.initTts(
+          engine,
+          model: paths.model,
+          voices: paths.voices,
+          tokens: paths.tokens,
+          lexicon: paths.lexicon,
+        );
       }
     } catch (e) {
       debugPrint('Texa speech init: $e');
       speechReady = false;
     }
     notifyListeners();
+    return speechReady;
+  }
+
+  /// Switches the voice engine (Settings): persists the choice,
+  /// downloads the newly selected engine first if needed, then
+  /// restarts TTS with it.
+  Future<void> changeTtsEngine(
+    TtsEngine engine, {
+    void Function(String label, double fraction)? onProgress,
+  }) async {
+    if (!await provisioning.isReadyFor(engine)) {
+      await provisioning.provision(onProgress ?? (_, _) {}, engine: engine);
+    }
+    await saveSettings(settings.copyWith(ttsEngine: engine));
+    await tryInitSpeech();
   }
 
   /// Path to the installed Silero model, when provisioned.
   Future<String?> sileroVadPath() async {
     try {
-      return await provisioning.isReady ? await provisioning.vadPath : null;
+      return await provisioning.isVadReady ? await provisioning.vadPath : null;
     } catch (_) {
       return null;
     }

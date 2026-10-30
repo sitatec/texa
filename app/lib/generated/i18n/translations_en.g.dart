@@ -380,6 +380,111 @@ class Translations$session$en {
   /// en: 'Microphone off'
   String get muted => 'Microphone off';
 
+  /// Status pill while Texa is busy but not thinking, speaking or drawing a specific thing.
+  ///
+  /// en: 'Working…'
+  String get working => 'Working…';
+
+  /// Status pill while Texa writes text on the board.
+  ///
+  /// en: 'Writing text…'
+  String get writingText => 'Writing text…';
+
+  /// Status pill while Texa writes a math expression on the board.
+  ///
+  /// en: 'Writing math expression…'
+  String get writingMath => 'Writing math expression…';
+
+  /// Status pill while Texa plots a function on the board.
+  ///
+  /// en: 'Plotting function…'
+  String get plottingFunction => 'Plotting function…';
+
+  /// Status pill while Texa draws a diagram on the board.
+  ///
+  /// en: 'Drawing diagram…'
+  String get drawingDiagram => 'Drawing diagram…';
+
+  /// Status pill while Texa marks landmark points on the board.
+  ///
+  /// en: 'Marking landmarks…'
+  String get markingLandmarks => 'Marking landmarks…';
+
+  /// Status pill while Texa edits a board element.
+  ///
+  /// en: 'Editing element…'
+  String get editingElement => 'Editing element…';
+
+  /// Status pill while Texa removes a board element.
+  ///
+  /// en: 'Removing element…'
+  String get removingElement => 'Removing element…';
+
+  /// Status pill while Texa points at something on the board.
+  ///
+  /// en: 'Pointing…'
+  String get pointing => 'Pointing…';
+
+  /// Status pill while Texa moves the board view.
+  ///
+  /// en: 'Moving view…'
+  String get movingView => 'Moving view…';
+
+  /// Status pill while Texa quietly updates its notes or memory.
+  ///
+  /// en: 'Taking notes…'
+  String get takingNotes => 'Taking notes…';
+
+  /// Status pill while Texa searches past session observations.
+  ///
+  /// en: 'Searching past sessions…'
+  String get searchingSessions => 'Searching past sessions…';
+
+  /// History label for a write_text action.
+  ///
+  /// en: 'Wrote text'
+  String get wroteText => 'Wrote text';
+
+  /// History label for a write_math action.
+  ///
+  /// en: 'Wrote math expression'
+  String get wroteMath => 'Wrote math expression';
+
+  /// History label for a plot_function action.
+  ///
+  /// en: 'Plotted function'
+  String get plottedFunction => 'Plotted function';
+
+  /// History label for a draw_svg action.
+  ///
+  /// en: 'Drew diagram'
+  String get drewDiagram => 'Drew diagram';
+
+  /// History label for a mark_landmarks action.
+  ///
+  /// en: 'Marked landmarks'
+  String get markedLandmarks => 'Marked landmarks';
+
+  /// History label for an edit_element action.
+  ///
+  /// en: 'Edited element'
+  String get editedElement => 'Edited element';
+
+  /// History label for a remove_element action.
+  ///
+  /// en: 'Removed element'
+  String get removedElement => 'Removed element';
+
+  /// History label for a point_at action.
+  ///
+  /// en: 'Pointed at'
+  String get pointedAt => 'Pointed at';
+
+  /// History label for a focus_viewport action.
+  ///
+  /// en: 'Moved view'
+  String get movedView => 'Moved view';
+
   /// Title of the macOS headphones notice shown when a session starts.
   ///
   /// en: 'Headphones needed on Mac'
@@ -537,6 +642,41 @@ class Translations$settings$en {
   ///
   /// en: 'Playback'
   String get playbackSection => 'Playback';
+
+  /// Section heading for the TTS voice engine settings.
+  ///
+  /// en: 'Tutor voice'
+  String get voiceSection => 'Tutor voice';
+
+  /// Name of the Kokoro TTS engine option.
+  ///
+  /// en: 'Kokoro'
+  String get voiceKokoro => 'Kokoro';
+
+  /// Description of the Kokoro TTS engine option.
+  ///
+  /// en: 'High quality, but may run slow on mobile and low-end devices.'
+  String get voiceKokoroDescription => 'High quality, but may run slow on mobile and low-end devices.';
+
+  /// Name of the Piper TTS engine option.
+  ///
+  /// en: 'Piper'
+  String get voicePiper => 'Piper';
+
+  /// Description of the Piper TTS engine option.
+  ///
+  /// en: 'Standard quality and uses fewer resources. Recommended for mobile.'
+  String get voicePiperDescription => 'Standard quality and uses fewer resources. Recommended for mobile.';
+
+  /// Badge marking the voice engine recommended for this device.
+  ///
+  /// en: 'Recommended'
+  String get voiceRecommended => 'Recommended';
+
+  /// Error shown when downloading or switching the voice engine fails.
+  ///
+  /// en: 'Could not download/switch the voice. Please try again.'
+  String get voiceDownloadFailed => 'Could not download/switch the voice. Please try again.';
 
   /// Section heading for data settings.
   ///
@@ -763,6 +903,27 @@ extension on Translations {
       'session.thinking' => 'Thinking…',
       'session.speaking' => 'Speaking…',
       'session.muted' => 'Microphone off',
+      'session.working' => 'Working…',
+      'session.writingText' => 'Writing text…',
+      'session.writingMath' => 'Writing math expression…',
+      'session.plottingFunction' => 'Plotting function…',
+      'session.drawingDiagram' => 'Drawing diagram…',
+      'session.markingLandmarks' => 'Marking landmarks…',
+      'session.editingElement' => 'Editing element…',
+      'session.removingElement' => 'Removing element…',
+      'session.pointing' => 'Pointing…',
+      'session.movingView' => 'Moving view…',
+      'session.takingNotes' => 'Taking notes…',
+      'session.searchingSessions' => 'Searching past sessions…',
+      'session.wroteText' => 'Wrote text',
+      'session.wroteMath' => 'Wrote math expression',
+      'session.plottedFunction' => 'Plotted function',
+      'session.drewDiagram' => 'Drew diagram',
+      'session.markedLandmarks' => 'Marked landmarks',
+      'session.editedElement' => 'Edited element',
+      'session.removedElement' => 'Removed element',
+      'session.pointedAt' => 'Pointed at',
+      'session.movedView' => 'Moved view',
       'session.headphonesTitle' => 'Headphones needed on Mac',
       'session.headphonesBody' => 'In this version, macOS can\'t stop Texa from hearing its own voice through your speakers, so it would hear itself and get stuck in a loop. Please use headphones for voice sessions on Mac.',
       'session.drawOnlyHint' =>
@@ -804,6 +965,13 @@ extension on Translations {
       'settings.apiSection' => 'Meta AI connection',
       'settings.captionsDefault' => 'Captions on by default',
       'settings.playbackSection' => 'Playback',
+      'settings.voiceSection' => 'Tutor voice',
+      'settings.voiceKokoro' => 'Kokoro',
+      'settings.voiceKokoroDescription' => 'High quality, but may run slow on mobile and low-end devices.',
+      'settings.voicePiper' => 'Piper',
+      'settings.voicePiperDescription' => 'Standard quality and uses fewer resources. Recommended for mobile.',
+      'settings.voiceRecommended' => 'Recommended',
+      'settings.voiceDownloadFailed' => 'Could not download/switch the voice. Please try again.',
       'settings.dataSection' => 'Your data',
       'settings.deleteAll' => 'Delete all sessions and remove API key',
       'settings.deleteAllTitle' => 'Delete everything?',

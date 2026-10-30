@@ -1,9 +1,15 @@
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:path_provider/path_provider.dart';
 
 import 'model_store.dart';
+
+
+int getOptimalThreadsImpl(int maxThreads) {
+  return min(max(1, Platform.numberOfProcessors), maxThreads);
+}
 
 /// Native model store: plain files under the app-support directory.
 class IoModelStore implements ModelStore {

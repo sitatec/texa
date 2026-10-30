@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
 import '../../../core/constants.dart';
+import '../../../core/data/models.dart';
 import 'tts_worker.dart';
 
 /// Owns speech for the app lifetime: Silero VAD on this isolate and the
@@ -31,22 +32,29 @@ class SherpaSpeech {
     }
   }
 
-  /// Starts the TTS worker (loading Kokoro once); returns false where
-  /// unavailable (web). Calling again with the same configuration reuses
-  /// the running worker; a different one restarts it.
+  /// Starts the TTS worker for [engine] (loading its model once);
+  /// returns false where unavailable (web). Calling again with the
+  /// same configuration reuses the running worker; a different one
+  /// restarts it — which is how switching voice in Settings takes effect.
   Future<bool> initTts(
-    String kokoroDir, {
-    String languageCode = 'us-en',
+    TtsEngine engine, {
+    required String model,
+    String? voices,
+    required String tokens,
+    required String lexicon,
   }) async {
     try {
       // Still needed on this isolate for the VAD created by [createVad].
       await _ensureBindings();
-      final key = '$kokoroDir|$languageCode';
+      final key = '$engine|$model|$tokens|$lexicon';
       if (_worker != null && _workerKey == key) return true;
       _worker?.dispose();
       _worker = await TtsWorker.start(
-        kokoroDir: kokoroDir,
-        languageCode: languageCode,
+        engine: engine,
+        model: model,
+        voices: voices,
+        tokens: tokens,
+        lexicon: lexicon,
       );
       _workerKey = _worker == null ? null : key;
       return _worker != null;

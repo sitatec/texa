@@ -1,11 +1,22 @@
+import 'dart:math';
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
+import 'package:texa/core/constants.dart';
 import 'package:web/web.dart' as web;
 
 import 'model_store.dart';
+
+int getOptimalThreadsImpl(int maxThreads) {
+  try {
+    final cores = web.window.navigator.hardwareConcurrency.toInt();
+    return min(max(1, cores), maxThreads);
+  } catch (_) {
+    return min(isMobile ? 2 : 4, maxThreads);
+  }
+}
 
 /// Web model store.
 ///

@@ -9,7 +9,7 @@ import '../../../core/constants.dart';
 import '../../../core/theme.dart';
 import '../board_controller.dart';
 import 'board_models.dart';
-import 'plotter.dart';
+import 'plot_preview.dart';
 
 enum BoardTool { pen, line, eraser }
 
@@ -30,6 +30,8 @@ class BoardView extends StatefulWidget {
     required this.onStrokeUpdate,
     required this.onStrokeEnd,
     required this.onErase,
+    this.onEraseStart,
+    this.onEraseEnd,
     this.captureKey,
     this.onDrawPointerDown,
     this.onDrawPointerUp,
@@ -43,6 +45,11 @@ class BoardView extends StatefulWidget {
   final void Function(Offset p) onStrokeUpdate;
   final VoidCallback onStrokeEnd;
   final void Function(Offset p) onErase;
+
+  /// Bracket one erase drag (down -> up/cancel), so the host can treat
+  /// the whole drag as a single undo step.
+  final VoidCallback? onEraseStart;
+  final VoidCallback? onEraseEnd;
   final GlobalKey? captureKey;
 
   /// Fired the instant a drawing/erasing pointer touches the board (and
@@ -76,12 +83,14 @@ class _BoardViewState extends State<BoardView> {
         }
       }
       _activePointer = null;
+      if (tool == BoardTool.eraser) widget.onEraseEnd?.call();
       widget.onDrawPointerUp?.call();
       return;
     }
     _activePointer = e.pointer;
     widget.onDrawPointerDown?.call();
     if (tool == BoardTool.eraser) {
+      widget.onEraseStart?.call();
       widget.onErase(e.localPosition);
     } else {
       widget.onStrokeStart();
@@ -102,7 +111,11 @@ class _BoardViewState extends State<BoardView> {
     if (e.pointer != _activePointer) return;
     _activePointer = null;
     widget.onDrawPointerUp?.call();
-    if (tool != BoardTool.eraser) widget.onStrokeEnd();
+    if (tool == BoardTool.eraser) {
+      widget.onEraseEnd?.call();
+    } else {
+      widget.onStrokeEnd();
+    }
   }
 
   @override
@@ -139,8 +152,20 @@ class _BoardViewState extends State<BoardView> {
                               key: ValueKey(e.id),
                               left: e.x,
                               top: e.y,
-                              width: e.width,
-                              height: math.max(24, e.height),
+                              // Text wraps at the board's right edge
+                              // and takes whatever height its lines
+                              // need - its stored box is measured from
+                              // the content, and legacy boxes saved
+                              // with a fixed height must not clip it.
+                              width: e.kind == BoardElementKind.text
+                                  ? math.min(
+                                      e.width,
+                                      math.max(1.0, boardWidth - e.x),
+                                    )
+                                  : e.width,
+                              height: e.kind == BoardElementKind.text
+                                  ? null
+                                  : math.max(24, e.height),
                               child: RepaintBoundary(
                                 child: Opacity(
                                   opacity: e.progress,
@@ -193,6 +218,7 @@ class _BoardViewState extends State<BoardView> {
           alignment: Alignment.topLeft,
           child: Text(
             e.text ?? '',
+            softWrap: true,
             style: TextStyle(
               color: e.color,
               fontSize: e.size,
@@ -319,10 +345,6 @@ class _BoardPainter extends CustomPainter {
   final List<BoardElement> elements;
   final int revision;
 
-  /// Plot sampling is pure but not cheap; cache per element content.
-  static final _plotCache =
-      <String, ({List<Offset> points, double yMin, double yMax})>{};
-
   @override
   void paint(Canvas canvas, Size size) {
     // Faint dot grid guides the eye without competing with ink.
@@ -373,88 +395,10 @@ class _BoardPainter extends CustomPainter {
   }
 
   void _paintPlot(Canvas canvas, BoardElement e) {
-    final xMin = e.xMin ?? -10, xMax = e.xMax ?? 10;
-    final key = '${e.id}|${e.expression}|$xMin|$xMax|${e.yMin}|${e.yMax}';
-    final sampled = _plotCache.putIfAbsent(
-      key,
-      () => samplePlot(e.expression ?? '', xMin, xMax, e.yMin, e.yMax),
-    );
-    if (sampled.points.isEmpty) return;
-    final rect = e.rect;
-    double mx(double x) => rect.left + (x - xMin) / (xMax - xMin) * rect.width;
-    double my(double y) =>
-        rect.bottom -
-        (y - sampled.yMin) / (sampled.yMax - sampled.yMin) * rect.height;
-    final axis = Paint()
-      ..color = const Color(0xFF9CA3AF)
-      ..strokeWidth = 2;
-    if (sampled.yMin < 0 && sampled.yMax > 0) {
-      canvas.drawLine(
-        Offset(rect.left, my(0)),
-        Offset(rect.right, my(0)),
-        axis,
-      );
-    }
-    if (xMin < 0 && xMax > 0) {
-      canvas.drawLine(
-        Offset(mx(0), rect.top),
-        Offset(mx(0), rect.bottom),
-        axis,
-      );
-    }
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..color = const Color(0xFFD1D5DB)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5,
-    );
-    final paint = Paint()
-      ..color = e.color.withValues(alpha: e.progress)
-      ..strokeWidth = 4
-      ..strokeCap = StrokeCap.round
-      ..style = PaintingStyle.stroke;
-    final path = Path();
-    var penDown = false;
-    final total = sampled.points.length;
-    final visible = (total * e.progress).ceil();
-    for (var i = 0; i < math.min(visible, total); i++) {
-      final p = sampled.points[i];
-      if (p.dx.isNaN) {
-        penDown = false;
-        continue;
-      }
-      final o = Offset(mx(p.dx), my(p.dy.clamp(sampled.yMin, sampled.yMax)));
-      if (!penDown) {
-        path.moveTo(o.dx, o.dy);
-        penDown = true;
-      } else {
-        path.lineTo(o.dx, o.dy);
-      }
-    }
-    canvas.drawPath(path, paint);
-    final labelStyle = const TextStyle(color: Color(0xFF6B7280), fontSize: 20);
-    for (final (text, pos) in [
-      (
-        xMin.toStringAsFixed(xMin % 1 == 0 ? 0 : 1),
-        Offset(rect.left, rect.bottom + 4),
-      ),
-      (
-        xMax.toStringAsFixed(xMax % 1 == 0 ? 0 : 1),
-        Offset(rect.right - 44, rect.bottom + 4),
-      ),
-      (sampled.yMax.toStringAsFixed(1), Offset(rect.left + 4, rect.top)),
-      (
-        sampled.yMin.toStringAsFixed(1),
-        Offset(rect.left + 4, rect.bottom - 26),
-      ),
-    ]) {
-      final tp = TextPainter(
-        text: TextSpan(text: text, style: labelStyle),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, pos);
-    }
+    canvas.save();
+    canvas.translate(e.x, e.y);
+    PlotPainter(e, progress: e.progress).paint(canvas, e.rect.size);
+    canvas.restore();
   }
 
   @override

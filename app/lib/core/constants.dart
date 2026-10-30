@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 
 /// Single source of truth for Texa's fixed values.
@@ -13,9 +14,26 @@ const int vadSilenceMs = 1000;
 const int sustainedSpeechMs = 300;
 const int connectTimeoutSeconds = 30;
 const int responseTimeoutSeconds = 120;
-const String kokoroModelUrl = String.fromEnvironment(
-  'KOKORO_MODEL_URL',
-  defaultValue: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_1.tar.bz2',
+
+final isMobile = [
+  TargetPlatform.iOS,
+  TargetPlatform.android,
+].contains(defaultTargetPlatform);
+
+/// Base URL the individual Kokoro files (`model.onnx`, `voices.bin`, …)
+/// are downloaded from; the file name is appended to it.
+const String kokoroBaseUrl = String.fromEnvironment(
+  'KOKORO_BASE_URL',
+  defaultValue:
+      'https://huggingface.co/sitatech/kokoro-multi-lang-v1_1/resolve/main/',
+);
+
+/// Base URL the individual Piper files (`model.onnx`, `tokens.txt`)
+/// are downloaded from; the file name is appended to it. Piper reuses
+/// Kokoro's lexicon, so it has no lexicon file of its own here.
+const String piperBaseUrl = String.fromEnvironment(
+  'PIPER_BASE_URL',
+  defaultValue: 'https://huggingface.co/sitatech/vits-piper-en_US-hfc_female-medium/resolve/main/',
 );
 const String sileroVadModelUrl = String.fromEnvironment(
   'SILERO_VAD_MODEL_URL',

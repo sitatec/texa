@@ -104,14 +104,17 @@ List<Map<String, dynamic>> toolSchemas() {
   return [
     tool(
       'write_text',
-      'Write short plain text on the board.',
+      'Write SHORT plain text on the board: a label, a heading, or a few short lines. Never write sentences or paragraphs on the board - say those in accompanying_speech instead. If the content needs more than one line, put line breaks directly in the text of a SINGLE write_text call ("line1\\nline2\\nline3") - never make separate write_text calls just to stack lines; that wastes calls and adds latency. The app measures the text (line breaks included) and wraps it at the board edge, so you do not need to supply width or height.',
       props(
         ['element_id', 'x', 'y', 'text'],
         {
           'element_id': id,
           'x': num,
           'y': num,
-          'text': str,
+          'text': {
+            'type': 'string',
+            'description': 'The text itself. Keep it brief - a few words, or a few short lines separated by \\n inside this one string.',
+          },
           'size': num,
           'color': str,
           'accompanying_speech': speech,
@@ -120,7 +123,7 @@ List<Map<String, dynamic>> toolSchemas() {
     ),
     tool(
       'write_math',
-      'Write LaTeX maths on the board.',
+      'Write one LaTeX maths expression or one short step on the board. Formulas cannot wrap, so keep each call to a single short line and use a separate call for the next step.',
       props(
         ['element_id', 'x', 'y', 'latex'],
         {
