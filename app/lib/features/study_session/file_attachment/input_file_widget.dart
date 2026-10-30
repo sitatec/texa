@@ -7,12 +7,14 @@ import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:logging/logging.dart';
-import 'package:record/record.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:mime/mime.dart';
 import 'package:texa/core/utils/snackbar.dart';
 import 'package:texa/core/theme.dart';
 import 'package:texa/generated/i18n/translations.g.dart';
+
+import '../recording/audio_recorder.dart';
+
 import 'package:waveform_flutter/waveform_flutter.dart' as wf;
 
 part '_audio_recorder_widget.dart';

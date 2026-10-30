@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:flutter/services.dart';
@@ -33,9 +32,6 @@ class _SessionScreenState extends State<SessionScreen> {
   final _fullScreenManager = FullScreenManager();
   bool _moreOpen = false;
 
-  /// The macOS headphones notice is shown once per app run, not on
-  /// every session the student opens.
-  static bool _macHeadphonesNoticeShown = false;
   bool _strokeUndoPushed = false;
   bool _boardPointerActive = false;
   List<TexaLocalFile> _attachments = [];
@@ -74,33 +70,6 @@ class _SessionScreenState extends State<SessionScreen> {
     });
     unawaited(c.init());
     c.addListener(_onControllerChanged);
-    // macOS has no echo cancellation in this version (see
-    // SessionController): through speakers Texa would hear its own
-    // voice and loop, so Mac students must be told to use headphones.
-    if (!_macHeadphonesNoticeShown &&
-        defaultTargetPlatform == TargetPlatform.macOS) {
-      _macHeadphonesNoticeShown = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) unawaited(_showMacHeadphonesNotice());
-      });
-    }
-  }
-
-  Future<void> _showMacHeadphonesNotice() async {
-    await showDialog<void>(
-      context: context,
-      builder: (_) => AlertDialog(
-        constraints: BoxConstraints(maxWidth: 500),
-        title: Text(tr.session.headphonesTitle),
-        content: Text(tr.session.headphonesBody),
-        actions: [
-          FilledButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(tr.common.gotIt),
-          ),
-        ],
-      ),
-    );
   }
 
   /// Once a turn takes the staged uploads, drop the visible selection so

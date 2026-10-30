@@ -485,17 +485,6 @@ class Translations$session$en {
   /// en: 'Moved view'
   String get movedView => 'Moved view';
 
-  /// Title of the macOS headphones notice shown when a session starts.
-  ///
-  /// en: 'Headphones needed on Mac'
-  String get headphonesTitle => 'Headphones needed on Mac';
-
-  /// Body of the macOS headphones notice shown when a session starts.
-  ///
-  /// en: 'In this version, macOS can't stop Texa from hearing its own voice through your speakers, so it would hear itself and get stuck in a loop. Please use headphones for voice sessions on Mac.'
-  String get headphonesBody =>
-      'In this version, macOS can\'t stop Texa from hearing its own voice through your speakers, so it would hear itself and get stuck in a loop. Please use headphones for voice sessions on Mac.';
-
   /// Hint shown when microphone permission was denied.
   ///
   /// en: 'Draw-only mode — draw on the board or attach a file, or enable the microphone in Settings.'
@@ -924,8 +913,6 @@ extension on Translations {
       'session.removedElement' => 'Removed element',
       'session.pointedAt' => 'Pointed at',
       'session.movedView' => 'Moved view',
-      'session.headphonesTitle' => 'Headphones needed on Mac',
-      'session.headphonesBody' => 'In this version, macOS can\'t stop Texa from hearing its own voice through your speakers, so it would hear itself and get stuck in a loop. Please use headphones for voice sessions on Mac.',
       'session.drawOnlyHint' =>
         'Draw-only mode — draw on the board or attach a file, or enable the microphone in Settings.',
       'session.listenHint' => 'I\'m listening — tell me what you\'re doing',

@@ -312,14 +312,6 @@
     "@movedView": {
       "description": "History label for a focus_viewport action."
     },
-    "headphonesTitle": "Headphones needed on Mac",
-    "@headphonesTitle": {
-      "description": "Title of the macOS headphones notice shown when a session starts."
-    },
-    "headphonesBody": "In this version, macOS can't stop Texa from hearing its own voice through your speakers, so it would hear itself and get stuck in a loop. Please use headphones for voice sessions on Mac.",
-    "@headphonesBody": {
-      "description": "Body of the macOS headphones notice shown when a session starts."
-    },
     "drawOnlyHint": "Draw-only mode — draw on the board or attach a file, or enable the microphone in Settings.",
     "@drawOnlyHint": {
       "description": "Hint shown when microphone permission was denied."
