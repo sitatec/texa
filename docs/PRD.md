@@ -5,7 +5,7 @@
 | Product | Texa — AI STEM Tutor |
 | Tagline | The personal AI tutor for everyone |
 | Document version | 1.6 |
-| Version history | v1.1: fixed Meta AI base URL, per-session immutable model, confirmed 1200×1600 board, no mid-turn recovery. v1.2: voice barge-in, natural turn judgement, whiteboard etiquette. v1.3: `<[IGNORE_TURN]>` sentinel (not a tool), AI element identifiers + edit/remove of own elements, first-launch model downloads, platform-setup requirements, slang (English-only) and code-quality standards (Tech Specs §16–§19). v1.4: corrected Kokoro model to v1_1, supported platforms are Android/iOS/macOS/Web with Windows planned. v1.6 (27 Oct 2026): file uploads (modal picker with preview grid), attempt-first pedagogy, per-session Session Observation, cross-session student Memory and observation search. v1.5 (27 Oct 2026): model files moved out of Flutter assets to `app/models/` and served in development by `app/startserver.sh`; model URLs are dart-defines defaulting to the production URLs, set for local development in `.vscode/launch.json` |
+| Version history | v1.1: fixed Meta AI base URL, per-session immutable model, confirmed 1600×1200 landscape board, no mid-turn recovery. v1.2: voice barge-in, natural turn judgement, whiteboard etiquette. v1.3: `<[IGNORE_TURN]>` sentinel (not a tool), AI element identifiers + edit/remove of own elements, first-launch model downloads, platform-setup requirements, slang (English-only) and code-quality standards (Tech Specs §16–§19). v1.4: corrected Kokoro model to v1_1, supported platforms are Android/iOS/macOS/Web with Windows planned. v1.6 (27 Oct 2026): file uploads (modal picker with preview grid), attempt-first pedagogy, per-session Session Observation, cross-session student Memory and observation search. v1.8 (28 Oct 2026): mark_landmarks tool (model supplies landmark names only, app computes coordinates), optional per-session reasoning effort at creation, landscape eraser/line-tool fixes. v1.7 (28 Oct 2026): landscape 1600×1200 board, custom high-performance board engine, API key in secure storage, tostore table engine for collections, subject selector removed, no text composer (voice + drawing + file uploads only), single pen-colour picker. v1.5 (27 Oct 2026): model files moved out of Flutter assets to `app/models/` and served in development by `app/startserver.sh`; model URLs are dart-defines defaulting to the production URLs, set for local development in `.vscode/launch.json` |
 | Status | Draft for prototype (MVP) |
 | Date | 27 October 2026 |
 | Platform | Flutter — Android, iOS, macOS, and Web (mobile is the primary target). Windows is planned but not a supported/tested platform in this version |
@@ -76,7 +76,7 @@ Prototype assumption: the person configuring the API key may be a parent/older s
 - Session screen: unified whiteboard (fixed logical size), pen/eraser/undo/redo, voice turn capture (VAD), AI replies as plain text (spoken) and/or board tool actions (SVG, LaTeX, text, function plots, pointers/highlights, viewport focus).
 - On-device VAD (Silero via `sherpa-onnx`) and TTS (Kokoro via `sherpa-onnx`), sentence-chunked speech, optional live captions of the chunk currently playing. Speech models are downloaded on first launch from URLs supplied via dart-defines defaulting to the production URLs (a local model server overrides them in development — Tech Specs §16).
 - Session overlays: mic mute/unmute, captions on/off, fullscreen enter/exit; collapsed under a **More** button on mobile.
-- Portrait-locked session screen on mobile; local persistence of sessions and board state (`tostore`).
+- Landscape-locked session screen; local persistence of sessions and board state (`tostore`).
 - Settings: API key, captions default, clear-all-data.
 
 ### 6.2 Deferred / Future (explicit backlog, not MVP)
@@ -103,7 +103,7 @@ App
 │   └── Settings (entry point)
 ├── Session
 │   ├── Whiteboard (primary surface)
-│   ├── Board toolbar (pen, eraser, undo, redo, clear)
+│   ├── Board toolbar (pen, line, eraser, undo, redo, clear)
 │   └── Overlay controls (mic, captions, fullscreen / More on mobile)
 └── Settings
     ├── API configuration
@@ -121,7 +121,7 @@ App
 5. User lands on Home. **Success:** user reaches Home with a working configuration.
 
 ### F-02 — Home / dashboard
-1. Home lists previous sessions as cards: title, subject (if set), model, last-updated time, and the stored board thumbnail.
+1. Home lists previous sessions as cards: title, model, last-updated time, and the stored board thumbnail.
 2. Empty state (no sessions): friendly illustration/copy and one primary action — **New session**.
 3. Tapping a session resumes it exactly where it left off (board contents, scroll/zoom position, conversation state).
 4. Secondary actions per session (long-press / overflow menu): **Rename**, **Delete** (with confirmation).
@@ -129,7 +129,6 @@ App
 
 ### F-03 — Starting a session & setting the problem
 1. Student lands on an empty board (or says/draws the problem immediately).
-2. Optional, non-blocking subject selector (Maths / Physics / Chemistry) sets tutoring context; the student can ignore it entirely.
 3. Student writes/draws the problem and starts talking. No "send" button is required.
 
 ### F-04 — Student turn (draw + talk) — core loop
@@ -226,10 +225,11 @@ Format: **ID — Requirement** *(acceptance criteria in italics)*.
 
 ### 9.3 Whiteboard
 - **FR-WB-01** — The board shall have a **fixed logical size** (Tech Specs §5), shared identically by student ink, AI content, capture, and AI coordinates.
-- **FR-WB-02** — The student shall be able to draw freehand (pen/finger/stylus), erase (including erasing parts of AI content), undo, redo, and clear (with confirmation).
+- **FR-AI-09** — The AI shall be able to mark exact landmark points on its own elements via `mark_landmarks`, supplying only landmark names (e.g. vertex, circumcenter, roots); the app computes and draws the points.
+- **FR-WB-02** — The student shall be able to draw freehand (pen/finger/stylus) with ink visible *while* drawing, draw straight lines (drag to preview, release to commit), erase (partially erasing a stroke splits it, leaving a gap; erasing also works on AI content), undo, redo, and clear (with confirmation).
 - **FR-WB-03** — AI-generated SVG, LaTeX renders, text, and plots shall be baked onto the same canvas layer so they zoom, pan, layer, and erase identically to student ink.
 - **FR-WB-04** — Board state shall autosave continuously and restore on resume/relaunch.
-- **FR-WB-05** — On mobile, the session screen shall be locked to **portrait** orientation.
+- **FR-WB-05** — The session screen shall be locked to **landscape** orientation.
 
 ### 9.4 Student Turn Capture
 - **FR-ST-01** — While unmuted, on-device VAD (Silero) shall detect speech start/end; a turn finalises after ~1s of trailing silence (configurable constant).
@@ -278,20 +278,20 @@ Format: **ID — Requirement** *(acceptance criteria in italics)*.
 - **FR-SE-05** — An always-available interrupt/stop affordance shall appear while the AI is speaking/drawing.
 
 ### 9.8 Data
-- **FR-DA-01** — Sessions (including their fixed model), board state, messages, and settings shall persist in the on-device `tostore` database only.
+- **FR-DA-01** — Sessions (including their fixed model), board state, messages, observations and settings shall persist in the on-device `tostore` database (table engine with indexes, Tech Specs §10) only; the API key shall persist only in platform secure storage.
 - **FR-DA-02** — No student work shall be lost on app kill, crash, or leaving a session (continuous autosave).
 - **FR-DA-03** — Each message shall be saved to the local DB as it is sent (student turn) and as it is received (AI reply, before playback). Captured turn video files are deleted after the turn completes; board state and saved messages persist.
 
 ## 10. UX & Visual Design Requirements
 
 - **Style:** modern, minimal, calm. Structured surfaces, generous whitespace, one primary action per screen, progressive disclosure. Brand: Google Sans Flex, primary blue `#3B82F6` with red `#EF6666`, green `#10B981`, yellow `#FBBF24` accents (per existing theme/logo). Light theme primary for the board experience; dark theme supported per existing theme definitions.
-- **Home:** clean session cards (title, subject chip if present, relative time — e.g. "2h ago"), single prominent New Session button/FAB. No dense metadata.
+- **Home:** clean session cards (title, relative time — e.g. "2h ago"), single prominent New Session button/FAB. No dense metadata.
 - **Board screen:** the board is ≥90% of the visual field. Toolbar and overlays are compact, translucent/floating, and recede. Status (Listening…/Thinking…/Speaking…) is a small pill, never a blocking spinner.
 - **Captions:** bottom-anchored, high-contrast, at most ~2 lines, showing only the current spoken chunk.
 - **Motion:** camera moves and drawing animations are smooth (300–500ms ease); no jarring cuts. AI drawing should visibly *draw in*, not pop.
 - **Touch targets:** ≥44pt, overlays reachable one-handed on mobile within the More pattern.
 - **Accessibility (prototype baseline):** captions serve hearing-impaired users; controls have semantic labels; text scales with system settings outside the board surface.
-- **Portrait on mobile:** session screen forced portrait; board letterboxed/centred within it, camera pan/zoom used to work across the full fixed board.
+- **Landscape:** session screen forced landscape; camera pan/zoom used to work across the full fixed board. There is no text composer: students speak, draw, or attach files (the attach icon sits with the other session overlay icons; files are sent as a turn when the upload modal closes).
 
 ## 11. Content & Tutor Behaviour (Product Level)
 
@@ -304,7 +304,7 @@ Format: **ID — Requirement** *(acceptance criteria in italics)*.
 ## 12. Privacy, Safety & Trust
 
 - **Prototype posture:** no accounts, no Texa servers; board video/audio go only to the Meta AI API. This must be stated plainly in setup/Settings ("Your board and voice are sent to Meta AI").
-- API keys are stored locally only (prototype: `tostore`; secure storage is a deferred hardening item, §6.2).
+- API keys are stored locally only, in platform secure storage (`flutter_secure_storage`); the key field states this in the UI.
 - The AI must stay on-topic (STEM tutoring), decline non-tutoring requests briefly and kindly, and never request personal information from the student.
 - All data can be wiped in Settings (delete all sessions + remove key).
 
@@ -324,7 +324,7 @@ Format: **ID — Requirement** *(acceptance criteria in italics)*.
 | AI emits malformed SVG/LaTeX/tool arguments | MVP: skip-and-continue (FR-AI-06); validation/repair deferred (§6.2) |
 | Latency breaks conversational feel | 1 FPS/540p payload, chunked TTS prefetch, progressive playback (start speaking before all chunks ready) |
 | VAD false triggers (TV, siblings, classroom noise) | Mic mute is prominent; silence threshold tunable; degraded modes defined |
-| Fixed board too small for large problems | Fixed 1200×1600 size + camera pan/zoom (Tech Specs §5) |
+| Fixed board too small for large problems | Fixed 1600×1200 size + camera pan/zoom (Tech Specs §5) |
 | API cost per turn surprises the key owner | Payload is deliberately tiny; each session displays its (fixed) model on its Home card (cost dashboard: future) |
 
 ## 15. Open Questions
@@ -337,7 +337,7 @@ Format: **ID — Requirement** *(acceptance criteria in italics)*.
 | Milestone | Contents |
 |---|---|
 | M0 — Foundations | sherpa-onnx VAD+Kokoro verified on target devices; canvas bake-in of SVG/LaTeX verified (Tech Specs §14 checks) |
-| M1 — Board & Home | Home/session CRUD, fixed board, drawing tools, autosave/resume, overlays + More, portrait lock, fullscreen |
+| M1 — Board & Home | Home/session CRUD, fixed board, drawing tools, autosave/resume, overlays + More, landscape lock, fullscreen |
 | M2 — Student Turn | Mic capture, Silero VAD turn finalisation, 1 FPS video encoding, send turn |
 | M3 — AI Turn | Tool-call handling, SVG/LaTeX/plot rendering, playback timeline, camera framing, chunked TTS + captions |
 | M4 — Polish & Validation | Empty/error states, Settings, moderated student tests, metrics in §13 |

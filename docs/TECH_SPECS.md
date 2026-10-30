@@ -23,14 +23,14 @@ No custom backend. The Flutter app is the whole system: UI, board engine, on-dev
 flowchart LR
   subgraph Device["Flutter App (device)"]
     UI["Home / Session UI"]
-    Board["Unified Whiteboard<br/>flutter_drawing_board"]
+    Board["Unified Whiteboard<br/>custom CustomPainter engine"]
     Capture["Turn Capture<br/>1 FPS frames + mic audio"]
     VAD["Silero VAD<br/>sherpa-onnx"]
     Playback["Playback Engine<br/>camera + draw animation"]
     TTS["Kokoro TTS<br/>sherpa-onnx · sentence chunks"]
     Plot["Function Plotter<br/>math_expressions"]
     Render["SVG (flutter_svg) / LaTeX<br/>(flutter_math_fork) raster bake-in"]
-    DB[("tostore<br/>sessions · board · messages · settings")]
+    DB[("tostore tables + KV<br/>sessions · boards · messages · observations")]
     Client["AI Client<br/>dart_openai"]
     UI --> Board
     Board --> Capture
@@ -60,7 +60,7 @@ flowchart LR
 |---|---|---|
 | UI framework | Flutter (Material 3), Google Sans Flex, existing `lib/core/theme.dart` | Light/dark themes already defined (blue `#3B82F6` primary; red/green/yellow accents) |
 | AI API client | `dart_openai` ^8.0.0 | Fixed base URL `https://api.meta.ai/v1` (compile-time constant, never user-entered); API key from Settings; model stored per session (§4.2) |
-| Whiteboard | `flutter_drawing_board` ^1.0.1+2 | Single canvas: ink, zoom/pan, undo/redo, eraser, frame capture |
+| Whiteboard | Custom engine (`board_widget.dart` / `board_controller.dart`) | Ink, AI elements, zoom/pan, undo/redo, eraser, frame capture. A stroke-only drawing-board package was evaluated and rejected: it cannot host heterogeneous AI elements (text/LaTeX/SVG/plot widgets), an AI element registry with edit/remove-by-id, per-element draw-on progress, or the eraser/point model Texa needs — using it would have meant wrapping/forking it around a second element system anyway. |
 | SVG rendering | `flutter_svg` ^2.3.0 | AI SVG → rasterised → baked onto canvas (§6.2) |
 | Maths rendering | `flutter_math_fork` ^0.7.4 | LaTeX → high-res raster → baked onto canvas (§6.3) |
 | Function plotting | `math_expressions` ^3.2.0 | Analytic evaluation on-device (§6.4) |
@@ -68,7 +68,8 @@ flowchart LR
 | Mic capture | `record` ^7.1.2 (+ `audio_session` ^0.2.4) | PCM/WAV capture; audio-session config for playback/recording coexistence |
 | TTS playback | `just_audio` ^0.10.6 | Sequential chunk playback with completion callbacks |
 | Turn video encoding | `flutter_quick_video_encoder` ^1.7.2 | 1 FPS board frames → lightweight video (§7) |
-| Local database | `tostore` ^3.6.0 | Sessions, board snapshots, messages, settings (§10) |
+| Local database | `tostore` ^3.6.0 (table engine) | Indexed tables for sessions/boards/messages/observations; KV only for singletons (§10) |
+| Secure storage | `flutter_secure_storage` ^10.0.0 | The Meta AI API key, on every platform |
 
 State management, DI, and navigation are deliberately not prescribed beyond this rule: keep them minimal (Flutter built-ins / a single lightweight approach chosen at M1) and do not introduce a framework that fights the canvas/playback controllers.
 
@@ -92,7 +93,7 @@ app/lib/
     playback/               # playback timeline, camera director, TTS chunk player, captions
     settings/               # API config, captions default, data wipe
   data/
-    db.dart                 # tostore collections & migrations
+    db.dart                 # tostore tables/KV, secure key, migrations
     models.dart             # Session, BoardSnapshot, Turn, Settings
     repositories.dart
 ```
@@ -105,7 +106,7 @@ Controllers that own timers/streams (VAD, capture, playback) MUST expose a singl
 `main` → load settings from `tostore`. If `apiKey` missing → Setup flow: (1) welcome, (2) API-key form with **Test connection** = minimal authenticated request via `dart_openai` against the fixed base URL `https://api.meta.ai/v1`; only a success enables Continue, (3) mic permission via `record` permission API, denial recorded as `micPermissionDenied` (app proceeds), (4) run model provisioning (§16): download the speech models from the dart-define URLs, extract Kokoro, and initialise Silero VAD + Kokoro — the flow does not continue to Home until this succeeds, with a Retry state on failure. Then Home. There is no base-URL or model field in Setup or Settings.
 
 ### 4.2 Home (F-02)
-Session list query: `sessions` sorted by `updatedAt desc`. Card = title, optional subject, model, relative `updatedAt`, and thumbnail (last board raster thumbnail stored on every board save, §10). **New Session flow:** (1) show the model picker — the user selects the AI model for this session; (2) insert the session row with the selected `model`, auto-title (`Session · 27 Oct, 14:30` pattern); (3) push the Session screen. The `model` column is write-once: no repository method updates it, and no UI (session screen, session menu, Settings) exposes a model editor for an existing session. Rename = dialog updating `title` only; Delete = confirm dialog → delete session + its board/messages. Empty state when count = 0.
+Session list query: `sessions` sorted by `updatedAt desc`. Card = title, optional subject, model, relative `updatedAt`, and thumbnail (last board raster thumbnail stored on every board save, §10). **New Session flow:** (1) show the model picker — a curated dropdown (`muse-wonder-1.0` default, `muse-spark-1.3`, `muse-spark-1.3-contributor`, or Custom revealing a free-text field; the raw `/models` list is never offered because it includes non-chat models) plus a reasoning-effort dropdown defaulting to Medium; (2) insert the session row with the selected `model`, auto-title (`Session · 27 Oct, 14:30` pattern); (3) push the Session screen. The `model` column is write-once: no repository method updates it, and no UI (session screen, session menu, Settings) exposes a model editor for an existing session. Rename = dialog updating `title` only; Delete = confirm dialog → delete session + its board/messages. Empty state when count = 0.
 
 ### 4.3 Student turn (F-04) — sequence
 ```mermaid
@@ -132,11 +133,11 @@ Board controller emits debounced snapshots (≤500 ms after last change, and on 
 ## 5. Whiteboard Specification
 
 ### 5.1 Fixed logical size
-- The board has one fixed logical size, defined once in `core/constants.dart`: **`boardWidth = 1200`, `boardHeight = 1600` logical units (3:4)**. This is a confirmed product decision. All AI coordinates, pointers, capture framing, and persisted elements use this space. `focus_viewport` targets are points/rects in this space.
+- The board has one fixed logical size, defined once in `core/constants.dart`: **`boardWidth = 1600`, `boardHeight = 1200` logical units (4:3 landscape)**. This is a confirmed product decision. All AI coordinates, pointers, capture framing, and persisted elements use this space. `focus_viewport` targets are points/rects in this space.
 - The board is rendered letterboxed/centred at any window size; the camera (pan/zoom via the drawing board's transformation controller) navigates within it. On desktop/tablet the same fixed board is used — the logical board is never resized per device.
 
 ### 5.2 Unified canvas & bake-in model
-All content lives on the `flutter_drawing_board` canvas as board elements (strokes/raster elements) so zoom, pan, layering, undo/redo, and the eraser apply uniformly (FR-WB-03):
+All content lives on the custom board canvas as board elements (strokes/raster elements) so zoom, pan, layering, undo/redo, and the eraser apply uniformly (FR-WB-03). **Rendering performance:** committed elements and the live stroke are separate layers — stroking only repaints the ink layer (near-duplicate points under 1.5 units are dropped); the committed layer repaints only when `BoardController.revision` changes (painter `shouldRepaint` compares revision + list identity); each rich element (text/math/SVG) is keyed and in its own `RepaintBoundary`; plot sampling is cached per element content; strokes paint as a single path (no per-segment calls, no per-element saveLayer). The session screen does not listen to the board, so drawing never rebuilds screen chrome; only the toolbar's undo/redo buttons subscribe to the board.
 - **Student ink:** native drawing-board strokes.
 - **AI SVG:** render with `flutter_svg` offscreen to a raster at ≥2× display resolution, insert as an image element at the target rect.
 - **AI LaTeX:** render with `flutter_math_fork` offscreen at high resolution (transparent background), insert as an image element at the target position with the model's requested size.
@@ -145,7 +146,7 @@ All content lives on the `flutter_drawing_board` canvas as board elements (strok
 - Consequence (accepted for MVP): baked AI elements are erasable and drawable-over, but not semantically editable (can't re-flow LaTeX). Semantic element identity is Deferred (§12).
 
 ### 5.3 Tools (student)
-Pen (colour + width presets), eraser, undo, redo, clear-board (confirm). Tool state is session-screen state, never persisted as content. Stylus and finger input both supported; palm rejection left to platform/board defaults.
+Pen (single colour button opening a palette overlay + width presets), **straight-line tool** (drag anchors a start point and previews a live two-point line to the current finger position, committed on lift), eraser, undo, redo, clear-board (confirm). **Eraser semantics:** rich elements (text/math/SVG/plot) touched by the eraser are removed whole; ink strokes are split — points under the eraser are cut out and the remaining runs become separate strokes, leaving a real gap (no straight bridge across the erased span, no whole-line deletion). The student may erase AI content (FR-WB-02); the AI has no tool that can erase student work. **Live ink:** the in-progress stroke/line preview paints on its own layer and must repaint on every point (the painter's `shouldRepaint` compares a monotonic tick, never the mutated stroke object). Tool state is session-screen state, never persisted as content. Stylus and finger input both supported; palm rejection left to platform/board defaults.
 
 ### 5.4 Camera / viewport
 - Auto-framing: when an AI action carries a target rect, animate the transformation controller so the rect is centred with ~10% padding, 300–500 ms ease-in-out, clamped to board bounds.
@@ -163,6 +164,7 @@ The model responds with either a plain text message (spoken, FR-AI-01) or an ord
 | `write_math` | `element_id`, `x, y, latex, size?`, `accompanying_speech?` | LaTeX raster bake-in |
 | `draw_svg` | `element_id`, `x, y, width, height, svg`, `accompanying_speech?` | SVG raster bake-in in rect |
 | `plot_function` | `element_id`, `x, y, width, height, expression, x_min, x_max, y_min?, y_max?, color?`, `accompanying_speech?` | On-device plot (§6.4) |
+| `mark_landmarks` | `element_id`, `landmarks` (names only), `color?`, `accompanying_speech?` | App-computed labelled markers on an existing element. The model supplies only names — never coordinates. Plots: `vertex`, `roots`, `y_intercept`, `maximum`, `minimum`; SVG shapes: `vertices`, `centroid`, `circumcenter`, `incenter`, `orthocenter`, `midpoints`; any element: `center`, corners. Computed in `landmarks.dart` from the sampled curve / parsed SVG geometry (polygon, line, rect, circle; viewBox-aware) and drawn as `landmark` elements (ids `<target>_<name>`, so they can be pointed at, edited or removed like other AI elements). Names that don't apply are skipped. |
 | `edit_element` | `element_id`, `x?, y?, width?, height?` plus the replacement content parameter of the element's type (`text` / `latex` / `svg` / `expression…`), `accompanying_speech?` | Re-renders and/or moves/resizes the AI element with that ID, in place (§6.5) |
 | `remove_element` | `element_id`, `accompanying_speech?` | Removes the AI element with that ID from the board (§6.5) |
 | `point_at` | (`x, y` \| `element_id`), `label?`, `accompanying_speech?` | Animated pointer arrow/highlight ring at the point, or at the stored rect of the referenced element; transient (fades after the step) |
@@ -215,34 +217,36 @@ Parse `expression` with `math_expressions` (variable `x`), sample ≥200 points 
 
 ### 7.2 Frame + audio capture
 - While `capturing`: grab a board snapshot at **1 FPS** (`frameInterval = 1000 ms`) using the drawing board's capture API, downscaled so the short side ≤ 540 px ("540p": 540×720 for the 3:4 board). Timestamps are monotonic from turn start.
-- Mic audio is recorded continuously for the whole turn (not per-frame) so speech between frames is preserved.
+- Mic audio is recorded continuously for the whole turn (not per-frame) so speech between frames is preserved. Both the 1 FPS frames and the audio are fed to the streaming encoder (§7.3) as they are captured.
 - Student drawing *without* speech: capture starts on speech only (per architecture). Note as known limitation — a student who only draws silently produces no turn in MVP; the status pill SHOULD hint "I'm listening — tell me what you're doing".
 
 ### 7.3 Encoding & payload (definitive — no alternatives)
-`flutter_quick_video_encoder` 1.7.2 takes raw RGBA image frames and raw PCM audio frames and muxes them into a single MP4 (H.264 + AAC, native AVFoundation/MediaCodec). The encoder is used exactly as follows:
+Encoding is **streaming**: the encoder is set up when capture begins, every frame is encoded as soon as it exists, and ending a turn only pads the final audio second and finalizes. No raw frames or full-turn PCM are buffered for a batch encode at the end — this keeps end-of-turn latency to finalize + send.
+
+All platforms sit behind one `TurnVideoEncoder` interface (`setup`, `appendVideoFrame`, `appendAudioFrame`, `finish` → MP4 bytes, `abort`), selected by conditional import:
+
+- **Native** (`turn_video_encoder_io.dart`): `flutter_quick_video_encoder` 1.7.2 takes raw RGBA image frames and raw PCM audio frames and muxes them into a single MP4 (H.264 + OPUS, native AVFoundation/MediaCodec), writing to a temp file whose bytes are read back at `finish` (file then deleted):
 
 ```dart
-await FlutterQuickVideoEncoder.setup(
-  width: 540, height: 720,          // board 1200x1600 downscaled to 540p (3:4)
-  fps: 1,
-  videoBitrate: 500000,
-  profileLevel: ProfileLevel.highAutoLevel,
-  audioChannels: 1,
-  audioBitrate: 64000,
+await encoder.setup(
+  width: 720, height: 540,          // board 1600x1200 downscaled to 540p (4:3)
+  fps: 1, videoBitrate: 500000,
+  audioChannels: 1, audioBitrate: 32000,
   sampleRate: 16000,                // matches VAD + mic capture (16 kHz mono)
-  filepath: '<turnTempDir>/turn_<id>.mp4',
 );
-// once per second of turn:
-await FlutterQuickVideoEncoder.appendVideoFrame(rawRgba); // exactly 540*720*4 bytes
-await FlutterQuickVideoEncoder.appendAudioFrame(rawPcm);  // exactly 16000*1*2/1 = 32000 bytes
-await FlutterQuickVideoEncoder.finish();
+// once per second of turn, while the student is still speaking:
+await encoder.appendVideoFrame(rawRgba); // exactly 540*720*4 bytes
+await encoder.appendAudioFrame(rawPcm);  // exactly 16000*1*2/1 = 32000 bytes
+final mp4Bytes = await encoder.finish();
 ```
 
+- **Web** (`turn_video_encoder_web.dart`): the browser's hardware-accelerated **WebCodecs** API — `VideoEncoder` (H.264; first supported of High/Main/Baseline profiles, hardware preferred) and `AudioEncoder` (`opus`) — muxed into an MP4 byte array by **mp4-muxer** (MIT, ~74 KB UMD build vendored at `app/web/vendor/mp4-muxer.js`, loaded from `web/index.html`; no FFmpeg WASM). Video ingestion first probes (once, at encoder setup, result cached for the app's lifetime) whether a `VideoFrame` can be constructed directly from a raw RGBA `Uint8Array`; if so, buffers stream straight in, otherwise frames fall back to `OffscreenCanvas` + `ImageData` → `ImageBitmap` → `VideoFrame`. Every `VideoFrame`, `ImageBitmap` and `AudioData` is closed immediately after submission to its encoder, so memory stays flat on long turns. `finish` flushes both encoders, finalizes the muxer and returns the MP4 bytes.
+
 Rules:
-- Mic capture produces a continuous 16 kHz mono 16-bit little-endian PCM stream (`record` stream mode). The turn recorder buffers this stream and, at each 1-second tick, appends the board frame (RGBA from the board capture, resized to 540×720) followed by that second's 32000-byte PCM chunk. Video and audio therefore stay in lock-step at 1 FPS.
-- Final partial second: the last PCM chunk is zero-padded (silence) to exactly 32000 bytes; the last video frame is appended once. No chunk is ever truncated.
-- The output is one MP4 file with embedded audio. That file is sent as the video input of the turn request to `https://api.meta.ai/v1` (endpoint confirmed to accept video with embedded audio). There is no separate audio upload and no keyframe fallback path.
-- Payload also includes: system prompt (§8.4), conversation context (§8.2), tool schemas (§6.1), board size (1200×1600), and the session's model. Turn MP4 files live in a temp directory and are deleted after the turn completes (success or terminal failure), per FR-DA-03.
+- Mic capture produces a continuous 16 kHz mono 16-bit little-endian PCM stream (`record` stream mode). A `PcmSecondBuffer` accumulates it and hands out exact one-second frames; each captured board frame is appended immediately, followed by that second's PCM frame once available (appends are serialized so video/audio stay interleaved V/A/V/A at 1 FPS — the native encoder's fixed frame sizes require exactly 32000-byte audio frames).
+- Final partial second: the last PCM chunk is zero-padded (silence) to exactly 32000 bytes; one final board frame is captured at turn end. No chunk is ever truncated. Discarded/false-alarm captures call `abort` instead and send nothing.
+- The output is one MP4 with embedded audio. That file is sent as the video input of the turn request to `https://api.meta.ai/v1` (endpoint confirmed to accept video with embedded audio). There is no separate audio upload and no keyframe fallback path.
+- Payload also includes: system prompt (§8.4), conversation context (§8.2), tool schemas (§6.1), board size (1600×1200), and the session's model. Turn MP4 files live in a temp directory and are deleted after the turn completes (success or terminal failure), per FR-DA-03.
 
 ### 7.4 Failure handling
 Encode failure → the turn is not sent; show a plain-language error and return to listening (student work stays on the board; the student simply speaks again). Send failure (offline/timeout/429/5xx) → keep board untouched, surface Retry (re-sends the same MP4 payload), never re-record the student.
@@ -250,7 +254,7 @@ Encode failure → the turn is not sent; show a plain-language error and return 
 ## 8. AI Client, Context & Playback
 
 ### 8.1 Client
-`dart_openai` configured with the compile-time base URL constant `https://api.meta.ai/v1`, the `apiKey` from Settings, and the `model` stored on the current session (immutable after creation, §4.2). Timeouts: connect 15 s, response 120 s (video turns are slow); one automatic retry on network error only (not on 4xx). Errors map to typed `AppError`s with plain-language user strings (FR flow F-09).
+`dart_openai` configured with the compile-time base URL constant `https://api.meta.ai/v1`, the `apiKey` from Settings, and the `model` stored on the current session (immutable after creation, §4.2). A session may also store a **reasoning effort** chosen in the New Session dialog (None/minimal/low/medium/high/xhigh, default Medium, immutable like the model); when set it is sent as the top-level `reasoning_effort` request parameter and shown as a reasoning-effort chip on Home session cards. Timeouts: connect 15 s, response 120 s (video turns are slow); one automatic retry on network error only (not on 4xx). Errors map to typed `AppError`s with plain-language user strings (FR flow F-09).
 
 ### 8.2 Conversation context
 **Response parsing (before any playback):** (1) if the reply's entire text content, trimmed, is exactly `<[IGNORE_TURN]>` and there are no tool calls → silent-ignore path (§8.6); (2) else if the sentinel appears anywhere in a larger reply → invalid, nothing is spoken/drawn, raw reply logged; (3) else execute text + tool calls via the playback engine (§8.3). The sentinel is a plain-text protocol token, never a tool — it must cost nothing beyond those characters.
@@ -280,7 +284,7 @@ for item in items:
 The system prompt lives in one versioned file (`features/ai/system_prompt.dart`, `kSystemPromptVersion`) and MUST establish all of the following:
 
 1. **Role & pedagogy (attempt-first):** patient STEM tutor for ages 11–18. For any new problem, first ask the student to try it or to explain how they think it should be approached — never open by solving it. Then assist only as necessary: hint first, then a guided single step, escalating only when the student is stuck, has tried and missed, or asks for more help. One step at a time; short spoken turns; check understanding regularly ("Does that step make sense before I go on?"). A complete worked solution requires a genuine attempt or an explicit request after trying.
-2. **Board contract:** fixed 1200×1600 board, origin top-left; tool list and when each is used (formulas → `write_math`, diagrams → `draw_svg`, curves → `plot_function` only — never hand-plotted coordinates, references → `point_at`/`focus_viewport`); every drawn element gets a unique semantic `element_id`, later steps reference those IDs to point at, edit, or remove their own elements; never erase student work (no tool can address it).
+2. **Board contract:** fixed 1600×1200 board, origin top-left; tool list and when each is used (formulas → `write_math`, diagrams → `draw_svg`, curves → `plot_function` only — never hand-plotted coordinates, references → `point_at`/`focus_viewport`); every drawn element gets a unique semantic `element_id`, later steps reference those IDs to point at, edit, or remove their own elements; never erase student work (no tool can address it).
 3. **Explanation etiquette on the board (FR-AI-09):**
    - Anchor first: `focus_viewport`/`point_at` the element being discussed *before* drawing anything new, so the student's eyes are in the right place.
    - One step per action; place new working in empty board space adjacent to the work it relates to — never on top of the student's writing.
@@ -358,13 +362,18 @@ A caption controller exposes `currentChunk: String?` (set on chunk playback star
 ### 9.3 Audio plumbing
 `audio_session`: playback category during TTS, record+playback during capture; duck/pause any app audio on interrupt. Kokoro voice/speed are constants in `constants.dart` (voice selectable later).
 
-## 10. Data Model & Persistence (`tostore`)
+## 10. Data Model & Persistence (`tostore` tables)
+
+Collections are **tables with indexes**, queried through tostore's query builder (`where`/`orderBy`/`limit`) — the app never loads a whole collection to filter it in Dart. Writes are per-row upserts/deletes. The pre-table KV layout (one JSON blob per collection) is migrated once on open (`migrated_tables_v1`). Singletons (`settings` JSON, tutor `memory`, `logs`) remain KV values, which is what KV is for. Observations: date bounds hit the indexed `date` column; content search is a case-insensitive contains over the small one-row-per-session result set until embeddings land (tostore supports vector indexes).
 
 ### 10.1 Collections
 | Collection | Fields (key ones) |
 |---|---|
 | `settings` (single row) | `apiKey`, `captionsDefault`, `micPermissionDenied` — no base URL (fixed constant) and no model (per-session) |
-| `sessions` | `id`, `title`, `subject?`, `model` (required, write-once — set at creation, never updated), `createdAt`, `updatedAt`, `thumbnailPath?` |
+| `sessions` | `id` (PK), `title`, `model` (required, write-once — set at creation, never updated), `reasoning` (nullable, write-once), `created_at`, `updated_at` (indexed), `thumbnail` |
+| `boards` | `session_id` (PK), `snapshot` (encoded board JSON) |
+| `messages` | `id` (PK), `session_id` (indexed), `role`, `kind`, `payload`, `created_at` (indexed) |
+| `observations` | `session_id` (PK), `date` (indexed), `content` |
 | `board_snapshots` | `sessionId` (key), `elementsJson` (serialised board elements incl. image-element asset refs), `aiElementRegistryJson` (§6.5: element_id → type/rect/asset), `viewportJson` (transform), `updatedAt` |
 | `observations` | `sessionId`, `date`, `content` (Session Observation, ≤2 paragraphs; blank at session start) |
 | `memory` (single value) | concise cross-session student Memory text |
@@ -387,12 +396,12 @@ There is **no app-killed-mid-turn recovery flow** in this version, by product de
 Because persistence is a local DB, killing/restarting the app at any point loses nothing already sent or received; on relaunch the session simply shows the saved board and message history. An AI reply that was received but not yet played is not replayed automatically — it exists in history and its board actions, if playback had already drawn any, are in the board snapshot. No in-flight-turn reconstruction is implemented.
 
 ### 10.6 API key storage (prototype)
-Stored in `tostore` settings as plain text — acceptable ONLY for this prototype (user's own key, own device, no backend). Labelled as-is in code comments; migration to platform secure storage is Deferred (§12) and required before any distribution.
+Stored **only** in platform secure storage (`flutter_secure_storage`, all supported platforms) under `texa_api_key`; never written to tostore. Settings JSON no longer contains the key. A key found in a legacy plaintext settings blob is migrated into secure storage on first load and the blob rewritten without it. The API-key field in Setup and Settings carries a helper note stating the key is stored securely on-device.
 
 ## 11. Session Screen UI Implementation
 
-- **Orientation:** on entering Session (mobile form factor), lock to portrait (`SystemChrome.setPreferredOrientations([portraitUp])`); restore on exit. Desktop/wide windows unaffected.
-- **Layout:** `Stack` — board (centred, letterboxed) → top status pill (Listening/Capturing/Thinking/Speaking) → board toolbar (pen/eraser/undo/redo/clear) → bottom caption area → overlay control cluster.
+- **Orientation:** on entering Session (mobile form factor), lock to landscape (`SystemChrome.setPreferredOrientations([landscapeLeft, landscapeRight])`); restore on exit. Desktop/wide windows unaffected.
+- **Layout:** `Stack` — board (centred, letterboxed) → top status pill (Listening/Capturing/Thinking/Speaking) → board toolbar (pen/line/eraser/undo/redo/clear/colour) → bottom caption area → overlay control cluster.
 - **Overlays (FR-SE-01/02):** mic (mute/unmute, destructive-tinted when muted), captions (CC toggle), fullscreen. Breakpoint: width < 600 dp (or mobile platform) ⇒ collapse into a single **More** (⋯) button that expands the cluster vertically on tap and auto-collapses on selection/outside tap. Fullscreen toggles `SystemChrome` immersive modes and restores on exit.
 - **Visuals:** follow PRD §10 and `core/theme.dart` — floating translucent pills/cards, 14 dp radii, blue primary, minimal chrome; the board is the hero. All overlay buttons ≥44 pt targets with tooltips/semantics.
 
@@ -421,7 +430,7 @@ Stored in `tostore` settings as plain text — acceptable ONLY for this prototyp
 Every design question in this spec is already decided; this section does not reopen any of them. These are pass/fail checks that the *finished implementation* matches the spec on real devices (e.g. "the MP4 from §7.3 really has synchronised audio"). If a check fails, the implementation is wrong and gets fixed — the specified design (formats, packages, flows) stays as written:
 
 1. **Encoder round-trip:** encode a 10-second turn per §7.3 on Android and iOS; verify the MP4 plays with audible, in-sync audio and `finish()` produces a valid file at 1 FPS / 540×720.
-2. **Canvas bake-in:** SVG + LaTeX rasterised into `flutter_drawing_board`; verify erase/zoom/pan behaviour and crispness at maximum zoom at the specified ≥2× raster scale.
+2. **Canvas bake-in:** SVG + LaTeX rasterised into the custom board; verify erase/zoom/pan behaviour and crispness at maximum zoom at the specified ≥2× raster scale.
 3. **Speech on device:** Silero VAD streaming + Kokoro chunk synthesis measured on a mid-range Android phone and an iPhone; verify chunk n+1 prefetch keeps playback gapless.
 4. **Save ordering:** kill the app (a) immediately after sending a turn, (b) immediately after receiving a reply; verify §10.5 — saved board + messages are intact on relaunch.
 5. **Barge-in (§8.6):** during playback, (a) a cough does not cancel the explanation and playback resumes from the interrupted chunk, (b) sustained speech stops TTS within 200 ms and is captured as the next turn, (c) side conversation answered with `<[IGNORE_TURN]>` resumes the suspended explanation.
@@ -433,7 +442,7 @@ Every design question in this spec is already decided; this section does not reo
 | Endpoint | Meta AI API; base URL fixed at `https://api.meta.ai/v1`, never user-entered |
 | Turn media format | Single MP4, 1 FPS video + embedded audio, via `flutter_quick_video_encoder` raw RGBA + raw PCM input (§7.3). Endpoint acceptance of video with embedded audio is confirmed |
 | Model selection | Chosen once per session at creation; immutable for the life of the session |
-| Board size | Fixed 1200×1600 logical units |
+| Board size | Fixed 1600×1200 logical units (landscape) |
 | App-killed mid-turn | No recovery flow; messages saved to the local DB as sent/received (§10.5) |
 | Turn detection | Silero VAD only; Smart Turn deferred (custom sherpa-onnx build) |
 | AI speech interruption | Voice barge-in is in the MVP: suspend within 200 ms, false-trigger (<300 ms) resume from chunk start, real interruption becomes the next turn with interruption context; a `<[IGNORE_TURN]>` reply resumes a suspended explanation (§8.6) |
@@ -469,11 +478,11 @@ const smartTurnModelUrl = String.fromEnvironment(
 **Local development:** `app/models/` holds the three files in the repo. `app/startserver.sh` serves that folder over HTTP (`python3 -m http.server`, default port 8765, all interfaces, fails fast listing any missing file). The "App (dev debug)" configuration in `.vscode/launch.json` (repo root) passes `--dart-define=KOKORO_MODEL_URL=http://127.0.0.1:8765/kokoro-int8-multi-lang-v1_1.tar.bz2`, `--dart-define=SILERO_VAD_MODEL_URL=http://127.0.0.1:8765/silero_vad.onnx`, and `--dart-define=SMART_TURN_MODEL_URL=http://127.0.0.1:8765/smart-turn-v3.2-int8.onnx`, so development builds download from the local server. Workflow: run `./startserver.sh` from `app/`, then launch from VS Code. For a physical device, replace `127.0.0.1` in the defines with the dev machine's LAN address (the server binds all interfaces).
 
 ### 16.2 Provisioning flow (first launch)
-1. A dedicated `ModelProvisioningService` owns `<appSupportDirectory>/models/` and a `models.json` manifest recording, per model: resolved source URL, installed version/directory, and a `verified` flag.
+1. A dedicated `ModelProvisioningService` owns the model files and a `models.json` manifest recording, per model: resolved source URL, installed version/directory, and a `verified` flag. Storage goes through a `ModelStore` platform layer: real files under `<appSupportDirectory>/models/` on Android/iOS/macOS; on web — where `path_provider` has no app-support directory and throws — files persist in the browser Cache Storage and are copied into sherpa-onnx's WASM in-memory filesystem (`/texa-models/...`) when the store activates, so the engine receives the same style of paths on every platform.
 2. **All builds download** from the resolved dart-define URLs (§16.1) — production by default, the local `startserver.sh` server under the VS Code dev launch config. First launch shows one download screen with per-file and overall progress and a Retry action on failure. Models are required: the app does not enter Home until provisioning succeeds.
 3. The Kokoro `.tar.bz2` is extracted with the `archive` package (bzip2 + tar decode) into `models/kokoro-int8-multi-lang-v1_1/`; the extracted tree must contain `model.int8.onnx`, `voices.bin`, `tokens.txt`, `lexicon-us-en.txt`, and `espeak-ng-data/`. `silero_vad.onnx` and `smart-turn-v3.2-int8.onnx` are stored as single files.
 4. Verification before marking `verified`: Kokoro and Silero are actually initialised through sherpa-onnx (§16.3/§7.1) against the installed paths. Smart Turn is downloaded and stored but **not loaded in the MVP** (its use remains Deferred, D2 — it needs the custom sherpa-onnx build); verification for it is file-present and non-empty.
-5. Later launches skip provisioning when the manifest shows all three verified. Deleting app data re-runs the flow. Downloads go to a temp file first and are moved into place only when complete, so a killed download never leaves a half-written model marked verified.
+5. Later launches skip provisioning when the manifest shows all models verified. Deleting app data re-runs the flow. Downloads are fully received and extracted before the `verified` manifest is written last, so a killed download never leaves a half-written model marked verified.
 
 ### 16.3 Kokoro TTS via sherpa-onnx (per `dart-api-examples/tts/bin/kokoro-en-lexicon.dart`)
 ```dart
@@ -581,7 +590,7 @@ await AudioSession.instance.configure(const AudioSessionConfiguration(
   androidWillPauseWhenDucked: true,
 ));
 ```
-Combined with `RecordConfig(echoCancel: true, noiseSuppress: true, autoGain: true)` (§8.6 layer 2), this is the complete echo/AEC story: `audio_session` selects the OS voice-communication mode, `record` engages the platform echo canceller in that mode. No `just_audio_background` (no background playback in the MVP), and no other package in the stack requires platform setup: `sherpa_onnx` ships its native libraries, `flutter_quick_video_encoder` uses stock AVFoundation/MediaCodec, `flutter_drawing_board`/`tostore` are pure Flutter/Dart for our usage.
+Combined with `RecordConfig(echoCancel: true, noiseSuppress: true, autoGain: true)` (§8.6 layer 2), this is the complete echo/AEC story: `audio_session` selects the OS voice-communication mode, `record` engages the platform echo canceller in that mode. No `just_audio_background` (no background playback in the MVP), and no other package in the stack requires platform setup: `sherpa_onnx` ships its native libraries, `flutter_quick_video_encoder` uses stock AVFoundation/MediaCodec, `tostore` is pure Flutter/Dart for our usage; the board is first-party code.
 
 ## 18. Localisation (slang, English-only MVP)
 
