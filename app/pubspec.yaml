@@ -22,7 +22,6 @@ dependencies:
   math_expressions: ^3.2.0
   flutter_math_fork: ^0.7.4
   flutter_recorder: ^2.0.6
-  audio_session: ^0.2.4
   just_audio: ^0.10.6
   http: ^1.6.0
   path_provider: ^2.1.5
@@ -39,6 +38,7 @@ dependencies:
   material_symbols_icons: ^4.2951.0
   chewie: ^1.17.4
   video_player: ^2.14.0
+  flutter_native_splash: ^2.4.8
   sherpa_onnx:
     path: ./sherpa-onnx/flutter/sherpa_onnx
 
@@ -49,6 +49,7 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   flutter_flavorizr: ^2.6.0
   build_runner: ^2.11.0
+  flutter_launcher_icons: "^0.14.4"
 
 dependency_overrides:
   sherpa_onnx_android_arm64:
@@ -83,3 +84,40 @@ flutter:
           weight: 500
         - asset: assets/fonts/GoogleSansFlex-SemiBold.ttf
           weight: 600
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  remove_alpha_ios: true
+  adaptive_icon_background: "#f5f5f5"
+  image_path: "../branding/logo.png"
+  adaptive_icon_foreground: "../branding/logo-transparent.png"
+  web:
+    generate: true
+    background_color: "#f5f5f5"
+    image_path: "../branding/logo.png"
+    theme_color: "#3B82F6"
+  macos:
+    generate: true
+    image_path: "../branding/logo.png"
+  windows:
+    generate: true
+    image_path: "../branding/logo.png"
+    icon_size: 96
+
+flutter_native_splash:
+  color: "#f5f5f5"
+  color_dark: "#f5f5f5"
+  image: "../branding/splash-logo.png"
+  image_dark: "../branding/splash-logo.png"
+  fullscreen: true
+  
+  android: true
+  ios: true
+  web: false # We handle web manually to support animation
+
+  android_12:
+    image: "../branding/splash-logo.png"
+    color: "#f5f5f5"
+    image_dark: "../branding/splash-logo.png"
+    color_dark: "#f5f5f5"

@@ -14,11 +14,31 @@
       "args": [
         "--flavor",
         "dev",
+        "--web-browser-flag=--disable-web-security",
+        // Local speech-model server (run app/startserver.sh first).
+        // Without these defines the app defaults to the production URLs.
+        "--dart-define=KOKORO_BASE_URL=http://127.0.0.1:8765/kokoro-multi-lang-v1_0/",
+        "--dart-define=SILERO_VAD_MODEL_URL=http://127.0.0.1:8765/silero_vad.onnx",
+        "--dart-define=SMART_TURN_MODEL_URL=http://127.0.0.1:8765/smart-turn-v3.2-int8.onnx"
+      ]
+    },
+    {
+      "name": "App Wasm (dev debug)",
+      "cwd": "app",
+      "request": "launch",
+      "type": "dart",
+      "flutterMode": "debug",
+      "program": "lib/main.dart",
+      "args": [
+        "--flavor",
+        "dev",
+        "-d",
+        "chrome",
         "--wasm",
         "--web-browser-flag=--disable-web-security",
         // Local speech-model server (run app/startserver.sh first).
         // Without these defines the app defaults to the production URLs.
-        "--dart-define=KOKORO_BASE_URL=http://127.0.0.1:8765/kokoro-multi-lang-v1_1/",
+        "--dart-define=KOKORO_BASE_URL=http://127.0.0.1:8765/kokoro-multi-lang-v1_0/",
         "--dart-define=SILERO_VAD_MODEL_URL=http://127.0.0.1:8765/silero_vad.onnx",
         "--dart-define=SMART_TURN_MODEL_URL=http://127.0.0.1:8765/smart-turn-v3.2-int8.onnx"
       ]

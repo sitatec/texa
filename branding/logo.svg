@@ -1,4 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 1060" width="100%" height="100%">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="100%" height="100%">
+  
+<svg xmlns="http://www.w3.org/2000/svg" transform="scale(0.8) translate(100,130)" viewBox="0 0 900 960" width="100%" height="100%">
   <!-- Definitions & Styling -->
   <defs>
     <style>
@@ -50,4 +52,5 @@
       Z
     " />
   </g>
+</svg>
 </svg>
