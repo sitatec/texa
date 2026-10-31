@@ -13,7 +13,7 @@ import 'package:texa/core/utils/snackbar.dart';
 import 'package:texa/core/theme.dart';
 import 'package:texa/generated/i18n/translations.g.dart';
 
-import '../recording/audio_recorder.dart';
+import '../audio_recorder.dart';
 
 import 'package:waveform_flutter/waveform_flutter.dart' as wf;
 

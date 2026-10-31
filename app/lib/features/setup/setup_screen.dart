@@ -2,12 +2,15 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
+import 'package:texa/core/widgets/texa_logo.dart';
 
 import '../../app_controller.dart';
+import '../../core/data/models.dart';
 import '../../core/errors.dart';
 import '../../core/theme.dart';
 import '../../generated/i18n/translations.g.dart';
 import '../study_session/ai/ai_client.dart';
+import '../study_session/speech/voice_engine_selector.dart';
 
 /// First launch: API key, microphone permission, then speech provisioning.
 class SetupScreen extends StatefulWidget {
@@ -26,12 +29,16 @@ class _SetupScreenState extends State<SetupScreen> {
   bool _provisioning = false;
   double _progress = 0;
   String _progressLabel = '';
+  late TtsEngine _selectedEngine;
   final TextEditingController _key = TextEditingController();
   @override
   void initState() {
     super.initState();
     _key.text = widget.app.settings.apiKey;
     _keyOk = _key.text.isNotEmpty && widget.app.settings.setupComplete;
+    // Pre-selected platform recommendation (Piper on mobile, Kokoro on
+    // desktop); nothing is downloaded until the user confirms below.
+    _selectedEngine = widget.app.settings.ttsEngineOrDefault;
   }
 
   @override
@@ -52,15 +59,14 @@ class _SetupScreenState extends State<SetupScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(Symbols.school, size: 64, color: texaBlue),
-                  const SizedBox(height: 18),
-                  Text(
-                    tr.setup.welcomeTitle,
-                    style: Theme.of(context).textTheme.headlineMedium,
-                    textAlign: TextAlign.center,
+                  Center(
+                    child: Padding(
+                      padding: EdgeInsetsDirectional.only(end: 50),
+                      child: const TexaLogo(),
+                    ),
                   ),
-                  const SizedBox(height: 10),
-                  Text(tr.setup.welcomeBody, textAlign: TextAlign.center),
+                  const SizedBox(height: 16),
+                  Text(tr.setup.welcome, textAlign: TextAlign.center),
                   const SizedBox(height: 14),
                   if (_step == 0) ...[
                     Container(
@@ -71,7 +77,7 @@ class _SetupScreenState extends State<SetupScreen> {
                       ),
                       child: Row(
                         children: [
-                          const Icon(Symbols.privacy_tip, color: texaBlue),
+                          const Icon(Symbols.info, color: texaBlue, size: 22),
                           const SizedBox(width: 10),
                           Expanded(child: Text(tr.setup.privacyNote)),
                         ],
@@ -85,7 +91,7 @@ class _SetupScreenState extends State<SetupScreen> {
                         labelText: tr.setup.apiKeyLabel,
                         hintText: tr.setup.apiKeyHint,
                         helperText: tr.setup.apiKeySecureNote,
-                        border: const OutlineInputBorder(),
+                        border: OutlineInputBorder(borderRadius: .circular(8)),
                       ),
                       onChanged: (_) => setState(() => _keyOk = false),
                     ),
@@ -121,10 +127,7 @@ class _SetupScreenState extends State<SetupScreen> {
                     const SizedBox(height: 10),
                     FilledButton(
                       onPressed: _keyOk
-                          ? () {
-                              setState(() => _step = 1);
-                              unawaited(_provision());
-                            }
+                          ? () => setState(() => _step = 1)
                           : null,
                       child: Text(tr.common.kContinue),
                     ),
@@ -138,6 +141,15 @@ class _SetupScreenState extends State<SetupScreen> {
                     const SizedBox(height: 8),
                     Text(tr.setup.modelsBody, textAlign: TextAlign.center),
                     const SizedBox(height: 20),
+                    if (!_provisioning) ...[
+                      VoiceEngineSelector(
+                        value: _selectedEngine,
+                        onChanged: (engine) => setState(
+                          () => _selectedEngine = engine ?? _selectedEngine,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
                     if (_provisioning) ...[
                       LinearProgressIndicator(
                         value: _progress == 0 ? null : _progress,
@@ -153,6 +165,11 @@ class _SetupScreenState extends State<SetupScreen> {
                           style: const TextStyle(color: texaRed),
                           textAlign: TextAlign.center,
                         ),
+                      ),
+                    if (!_provisioning && _error == null)
+                      FilledButton(
+                        onPressed: () => unawaited(_provision()),
+                        child: Text(tr.common.kContinue),
                       ),
                     if (!_provisioning && _error != null) ...[
                       const SizedBox(height: 12),
@@ -200,6 +217,9 @@ class _SetupScreenState extends State<SetupScreen> {
       _progress = 0;
     });
     try {
+      await widget.app.saveSettings(
+        widget.app.settings.copyWith(ttsEngine: _selectedEngine),
+      );
       await widget.app.provisioning.provision((label, f) {
         if (mounted) {
           setState(() {
@@ -210,7 +230,7 @@ class _SetupScreenState extends State<SetupScreen> {
             );
           });
         }
-      }, engine: widget.app.settings.ttsEngineOrDefault);
+      }, engine: _selectedEngine);
       final vadOk = await widget.app.speech.verifyVad(
         await widget.app.provisioning.vadPath,
         smartTurnPath: await widget.app.provisioning.smartTurnPath,

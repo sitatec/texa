@@ -25,7 +25,7 @@ final isMobile = [
 const String kokoroBaseUrl = String.fromEnvironment(
   'KOKORO_BASE_URL',
   defaultValue:
-      'https://huggingface.co/sitatech/kokoro-multi-lang-v1_1/resolve/main/',
+      'https://huggingface.co/sitatech/kokoro-multi-lang-v1_0/resolve/main/',
 );
 
 /// Base URL the individual Piper files (`model.onnx`, `tokens.txt`)

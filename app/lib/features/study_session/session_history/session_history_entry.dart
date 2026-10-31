@@ -81,10 +81,13 @@ class SessionHistoryEntry extends StatelessWidget {
                 _ActionEntry(call: call.cast<String, dynamic>()),
           if (video != null && video.isNotEmpty) ...[
             const SizedBox(height: 8),
-            TurnVideoPlayer(
-              key: ValueKey('history-video-${m.id}'),
-              base64Video: video,
-              messageId: m.id,
+            SizedBox(
+              height: 360,
+              child: TurnVideoPlayer(
+                key: ValueKey('history-video-${m.id}'),
+                base64Video: video,
+                messageId: m.id,
+              ),
             ),
           ],
         ],
@@ -168,7 +171,7 @@ class _ActionEntry extends StatelessWidget {
           children: [
             if ((element.expression ?? '').isNotEmpty)
               Text(
-                'f(x) = ${element.expression}',
+                element.expression!,
                 style: const TextStyle(fontSize: 13, color: Colors.black54),
               ),
             const SizedBox(height: 4),
@@ -222,9 +225,7 @@ class _ActionEntry extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      element.expression == null
-                          ? tr.session.plottedFunction
-                          : 'f(x) = ${element.expression}',
+                      element.expression ?? tr.session.plottedFunction,
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:chewie/chewie.dart';
 import 'package:flutter/material.dart';
+import 'package:texa/core/constants.dart';
 import 'package:video_player/video_player.dart';
 
 import 'turn_video_controller.dart';
@@ -50,7 +51,7 @@ class _TurnVideoPlayerState extends State<TurnVideoPlayer> {
         looping: false,
         showControls: true,
         aspectRatio: video.value.aspectRatio == 0
-            ? 4 / 3
+            ? boardWidth / boardHeight
             : video.value.aspectRatio,
       );
       setState(() {});
@@ -72,9 +73,9 @@ class _TurnVideoPlayerState extends State<TurnVideoPlayer> {
     return ClipRRect(
       borderRadius: BorderRadius.circular(10),
       child: AspectRatio(
-        // Board turn videos are 4:3 (720x540); fall back to that until
+        // Board turn videos are boardWidth x boardHeight; fall back to that until
         // the controller reports its own ratio.
-        aspectRatio: chewie?.aspectRatio ?? 4 / 3,
+        aspectRatio: chewie?.aspectRatio ?? boardWidth / boardHeight,
         child: ColoredBox(
           color: Colors.black,
           child: _failed

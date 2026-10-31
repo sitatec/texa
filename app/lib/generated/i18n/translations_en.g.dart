@@ -148,22 +148,17 @@ class Translations$setup$en {
 
   // Translations
 
-  /// Headline on the first-launch welcome screen.
+  /// Message on the first-launch welcome screen.
   ///
-  /// en: 'Your AI tutor that draws with you'
-  String get welcomeTitle => 'Your AI tutor that draws with you';
-
-  /// Explanation on the welcome screen.
-  ///
-  /// en: 'Draw on the shared board, talk out loud, and Texa will explain step by step — writing, drawing and pointing right on your work.'
-  String get welcomeBody =>
-      'Draw on the shared board, talk out loud, and Texa will explain step by step — writing, drawing and pointing right on your work.';
+  /// en: 'Your personal AI tutor that can speak out loud, write, and draw with you on a shared whiteboard.'
+  String get welcome =>
+      'Your personal AI tutor that can speak out loud, write, and draw with you on a shared whiteboard.';
 
   /// Privacy note in setup and Settings.
   ///
-  /// en: 'Texa's AI Agent is powered by the Meta AI models. Provide your valid Meta AI API Kay to continue.'
+  /// en: 'Texa's AI Agent is powered by the Meta AI models. Provide your valid Meta AI API Key to continue.'
   String get privacyNote =>
-      'Texa\'s AI Agent is powered by the Meta AI models. Provide your valid Meta AI API Kay to continue.';
+      'Texa\'s AI Agent is powered by the Meta AI models. Provide your valid Meta AI API Key to continue.';
 
   /// Label for the API key field in setup and Settings.
   ///
@@ -253,8 +248,9 @@ class Translations$home$en {
 
   /// Empty-state explanation on Home.
   ///
-  /// en: 'Create a session, draw your problem on the board, and talk Texa through it.'
-  String get emptyBody => 'Create a session, draw your problem on the board, and talk Texa through it.';
+  /// en: 'Drop in a document, snap a photo of your problem, or sketch directly on the board—then work through it with Texa.'
+  String get emptyBody =>
+      'Drop in a document, snap a photo of your problem,\nor sketch directly on the board—then work through it with Texa.';
 
   /// Settings button tooltip on Home.
   ///
@@ -847,10 +843,10 @@ extension on Translations {
       'common.maxReached' => ({required Object max}) => 'You can add up to ${max} files',
       'common.validationIndicatingMinimum' => ({required Object min}) => 'Add at least ${min} file(s)',
       'common.validationIndicatingMaximum' => ({required Object max}) => 'Add at most ${max} files',
-      'setup.welcomeTitle' => 'Your AI tutor that draws with you',
-      'setup.welcomeBody' => 'Draw on the shared board, talk out loud, and Texa will explain step by step — writing, drawing and pointing right on your work.',
+      'setup.welcome' =>
+        'Your personal AI tutor that can speak out loud, write, and draw with you on a shared whiteboard.',
       'setup.privacyNote' =>
-        'Texa\'s AI Agent is powered by the Meta AI models. Provide your valid Meta AI API Kay to continue.',
+        'Texa\'s AI Agent is powered by the Meta AI models. Provide your valid Meta AI API Key to continue.',
       'setup.apiKeyLabel' => 'Meta AI API key',
       'setup.apiKeyHint' => 'Paste your API key',
       'setup.apiKeySecureNote' =>
@@ -868,7 +864,7 @@ extension on Translations {
       'home.title' => 'Texa',
       'home.newSession' => 'New session',
       'home.emptyTitle' => 'Start learning with Texa',
-      'home.emptyBody' => 'Create a session, draw your problem on the board, and talk Texa through it.',
+      'home.emptyBody' => 'Drop in a document, snap a photo of your problem,\nor sketch directly on the board—then work through it with Texa.',
       'home.settings' => 'Settings',
       'home.deleteSessionTitle' => 'Delete this session?',
       'home.deleteSessionBody' => 'Its board and history will be permanently deleted from this device.',

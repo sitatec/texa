@@ -43,7 +43,7 @@ void main() {
     final client = MockClient((request) async {
       final url = request.url.toString();
       requested.add(url);
-      if (url.contains('kokoro-multi-lang-v1_1')) {
+      if (url.contains('kokoro-multi-lang-v1_0')) {
         return http.Response.bytes(
           utf8.encode('fake:${request.url.pathSegments.last}'),
           200,
@@ -65,7 +65,7 @@ void main() {
     expect(await service.isReadyFor(TtsEngine.piper), isFalse);
     // Each Kokoro file used by the TTS worker is fetched individually
     // from the base URL, with the (non-int8) model name.
-    expect(requested.where((u) => u.contains('kokoro-multi-lang-v1_1')), [
+    expect(requested.where((u) => u.contains('kokoro-multi-lang-v1_0')), [
       endsWith('/model.onnx'),
       endsWith('/voices.bin'),
       endsWith('/tokens.txt'),
@@ -74,15 +74,15 @@ void main() {
     expect(
       store.files.keys,
       containsAll([
-        'kokoro-multi-lang-v1_1/model.onnx',
-        'kokoro-multi-lang-v1_1/voices.bin',
-        'kokoro-multi-lang-v1_1/tokens.txt',
-        'kokoro-multi-lang-v1_1/lexicon-en-us.txt',
+        'kokoro-multi-lang-v1_0/model.onnx',
+        'kokoro-multi-lang-v1_0/voices.bin',
+        'kokoro-multi-lang-v1_0/tokens.txt',
+        'kokoro-multi-lang-v1_0/lexicon-en-us.txt',
       ]),
     );
     expect(store.files['silero_vad.onnx'], [1, 2, 3]);
     expect(progress.last, 1);
-    expect(await service.kokoroDir, endsWith('kokoro-multi-lang-v1_1'));
+    expect(await service.kokoroDir, endsWith('kokoro-multi-lang-v1_0'));
     expect(await service.vadPath, endsWith('silero_vad.onnx'));
   });
 
@@ -110,7 +110,7 @@ void main() {
           endsWith(
             'vits-piper-en_US-hfc_female-medium/resolve/main/tokens.txt',
           ),
-          endsWith('kokoro-multi-lang-v1_1/resolve/main/lexicon-en-us.txt'),
+          endsWith('kokoro-multi-lang-v1_0/resolve/main/lexicon-en-us.txt'),
         ]),
       );
       // No Kokoro model/voices are fetched for a Piper install.
@@ -129,7 +129,7 @@ void main() {
       );
       expect(
         paths.lexicon,
-        endsWith('kokoro-multi-lang-v1_1/lexicon-en-us.txt'),
+        endsWith('kokoro-multi-lang-v1_0/lexicon-en-us.txt'),
       );
     },
   );

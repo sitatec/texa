@@ -19,7 +19,7 @@ import 'playback/playback_engine.dart';
 import 'playback/speech_chunker.dart';
 import 'playback/tts_service.dart';
 import 'playback/wav_builder.dart';
-import 'recording/audio_recorder.dart';
+import 'audio_recorder.dart';
 import 'speech/sherpa_speech.dart';
 import 'board_controller.dart';
 import 'turn_video_encoder/pcm_second_buffer.dart';

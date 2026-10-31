@@ -2,7 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:texa/features/study_session/playback/wav_builder.dart';
-import 'package:texa/features/study_session/recording/audio_recorder.dart';
+import 'package:texa/features/study_session/audio_recorder.dart';
 
 void main() {
   group('AudioRecorder AEC strategy', () {

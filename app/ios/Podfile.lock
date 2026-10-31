@@ -1,0 +1,22 @@
+PODS:
+  - Flutter (1.0.0)
+  - flutter_quick_video_encoder (0.0.1):
+    - Flutter
+
+DEPENDENCIES:
+  - Flutter (from `Flutter`)
+  - flutter_quick_video_encoder (from `.symlinks/plugins/flutter_quick_video_encoder/ios`)
+
+EXTERNAL SOURCES:
+  Flutter:
+    :path: Flutter
+  flutter_quick_video_encoder:
+    :path: ".symlinks/plugins/flutter_quick_video_encoder/ios"
+
+SPEC CHECKSUMS:
+  Flutter: 71a624a5bc0c04062bf19101d501e466baf2fb47
+  flutter_quick_video_encoder: c012b1523f40093feeffa90cebfe71b32b7b6d25
+
+PODFILE CHECKSUM: c0c16203bbf102f9e44e0f8d8657143e7de94b59
+
+COCOAPODS: 1.16.2

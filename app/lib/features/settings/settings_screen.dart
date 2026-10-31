@@ -3,14 +3,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:flutter/services.dart';
+import 'package:texa/core/widgets/texa_app_bar.dart';
 
 import '../../app_controller.dart';
-import '../../core/constants.dart';
 import '../../core/data/models.dart';
 import '../../core/errors.dart';
 import '../../core/theme.dart';
 import '../../generated/i18n/translations.g.dart';
 import '../study_session/ai/ai_client.dart';
+import '../study_session/speech/voice_engine_selector.dart';
 
 /// Settings: API key, captions default, local logs and data wipe.
 class SettingsScreen extends StatefulWidget {
@@ -54,7 +55,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(tr.settings.title)),
+      appBar: TexaAppBar(title: Text(tr.settings.title)),
       body: Center(
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: 900),
@@ -77,7 +78,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     labelText: tr.setup.apiKeyLabel,
                     hintText: tr.setup.apiKeyHint,
                     helperText: tr.setup.apiKeySecureNote,
-                    border: const OutlineInputBorder(),
+                    border: OutlineInputBorder(borderRadius: .circular(8)),
                   ),
                 ),
                 if (_message != null)
@@ -109,6 +110,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 SwitchListTile(
+                  visualDensity: .compact,
+                  dense: true,
                   value: widget.app.settings.captionsDefault,
                   title: Text(tr.settings.captionsDefault),
                   onChanged: (v) async {
@@ -123,29 +126,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   tr.settings.voiceSection,
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
-                RadioGroup<TtsEngine>(
-                  groupValue: widget.app.settings.ttsEngineOrDefault,
+                VoiceEngineSelector(
+                  value: widget.app.settings.ttsEngineOrDefault,
                   onChanged: _voiceSwitching ? (_) {} : _changeVoice,
-                  child: Column(
-                    children: [
-                      RadioListTile<TtsEngine>(
-                        value: TtsEngine.kokoro,
-                        title: _voiceTitle(
-                          tr.settings.voiceKokoro,
-                          recommended: !isMobile,
-                        ),
-                        subtitle: Text(tr.settings.voiceKokoroDescription),
-                      ),
-                      RadioListTile<TtsEngine>(
-                        value: TtsEngine.piper,
-                        title: _voiceTitle(
-                          tr.settings.voicePiper,
-                          recommended: isMobile,
-                        ),
-                        subtitle: Text(tr.settings.voicePiperDescription),
-                      ),
-                    ],
-                  ),
                 ),
                 if (_voiceSwitching) ...[
                   const SizedBox(height: 8),
@@ -170,7 +153,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   decoration: InputDecoration(
                     labelText: tr.settings.memoryLabel,
                     hintText: tr.settings.memoryHint,
-                    border: const OutlineInputBorder(),
+                    border: OutlineInputBorder(borderRadius: .circular(8)),
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -271,22 +254,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(tr.settings.saved)));
     }
-  }
-
-  Widget _voiceTitle(String name, {required bool recommended}) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(name),
-        if (recommended) ...[
-          const SizedBox(width: 8),
-          Chip(
-            label: Text(tr.settings.voiceRecommended),
-            visualDensity: VisualDensity.compact,
-          ),
-        ],
-      ],
-    );
   }
 
   Future<void> _changeVoice(TtsEngine? engine) async {

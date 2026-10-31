@@ -4,7 +4,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:flutter/services.dart';
+import 'package:texa/core/constants.dart';
 import 'package:texa/core/utils/fullscreen_manager.dart';
+import 'package:texa/core/widgets/texa_app_bar.dart';
 
 import '../../core/theme.dart';
 import '../../generated/i18n/translations.g.dart';
@@ -130,11 +132,9 @@ class _SessionScreenState extends State<SessionScreen> {
         return Scaffold(
           appBar: _fullscreen
               ? null
-              : AppBar(
-                  toolbarHeight: 42,
-                  leading: Navigator.canPop(context)
-                      ? Transform.scale(scale: 0.9, child: BackButton())
-                      : null,
+              : TexaAppBar(
+                  height: 42,
+                  centerTitle: true,
                   title: Text(
                     c.session.title,
                     overflow: TextOverflow.ellipsis,
@@ -241,8 +241,8 @@ class _SessionScreenState extends State<SessionScreen> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Container(
-                            width: 6,
-                            height: 6,
+                            width: isMobile ? 6 : 8,
+                            height: isMobile ? 6 : 8,
                             decoration: BoxDecoration(
                               color:
                                   c.statusKey == 'capturing' ||
@@ -256,8 +256,8 @@ class _SessionScreenState extends State<SessionScreen> {
                           const SizedBox(width: 8),
                           Text(
                             _statusText(),
-                            style: const TextStyle(
-                              fontSize: 11,
+                            style: TextStyle(
+                              fontSize: isMobile ? 11 : 13,
                               color: Colors.white,
                               fontWeight: FontWeight.w500,
                             ),

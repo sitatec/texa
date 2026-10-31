@@ -20,7 +20,7 @@ class ModelProvisioningService {
   final ModelStore _store;
   final http.Client _client;
 
-  static const _kokoroDirName = 'kokoro-multi-lang-v1_1';
+  static const _kokoroDirName = 'kokoro-multi-lang-v1_0';
 
   /// The Kokoro files the TTS worker actually loads (see `tts_worker.dart`),
   /// downloaded individually from [kokoroBaseUrl] instead of extracting

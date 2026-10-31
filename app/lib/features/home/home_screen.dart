@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
+import 'package:texa/core/widgets/texa_app_bar.dart';
 
 import '../../app_controller.dart';
 import '../../core/theme.dart';
@@ -22,8 +23,8 @@ class HomeScreen extends StatelessWidget {
     return ListenableBuilder(
       listenable: app,
       builder: (context, _) => Scaffold(
-        appBar: AppBar(
-          title: Text(tr.home.title),
+        appBar: TexaAppBar(
+          maxWidth: 880,
           actions: [
             IconButton(
               tooltip: tr.home.settings,
@@ -277,6 +278,7 @@ class HomeScreen extends StatelessWidget {
                     decoration: InputDecoration(
                       labelText: tr.home.modelNameLabel,
                       hintText: 'e.g. meta-ai-model',
+                      border: OutlineInputBorder(borderRadius: .circular(8)),
                     ),
                     onChanged: (_) => setState(() {}),
                   ),

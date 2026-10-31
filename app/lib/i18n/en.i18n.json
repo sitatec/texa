@@ -56,15 +56,11 @@
     }
   },
   "setup": {
-    "welcomeTitle": "Your AI tutor that draws with you",
-    "@welcomeTitle": {
-      "description": "Headline on the first-launch welcome screen."
+    "welcome": "Your personal AI tutor that can speak out loud, write, and draw with you on a shared whiteboard.",
+    "@welcome": {
+      "description": "Message on the first-launch welcome screen."
     },
-    "welcomeBody": "Draw on the shared board, talk out loud, and Texa will explain step by step — writing, drawing and pointing right on your work.",
-    "@welcomeBody": {
-      "description": "Explanation on the welcome screen."
-    },
-    "privacyNote": "Texa's AI Agent is powered by the Meta AI models. Provide your valid Meta AI API Kay to continue.",
+    "privacyNote": "Texa's AI Agent is powered by the Meta AI models. Provide your valid Meta AI API Key to continue.",
     "@privacyNote": {
       "description": "Privacy note in setup and Settings."
     },
@@ -130,7 +126,7 @@
     "@emptyTitle": {
       "description": "Empty-state heading when there are no sessions."
     },
-    "emptyBody": "Create a session, draw your problem on the board, and talk Texa through it.",
+    "emptyBody": "Drop in a document, snap a photo of your problem,\nor sketch it directly on the board—then work through it with Texa.",
     "@emptyBody": {
       "description": "Empty-state explanation on Home."
     },
