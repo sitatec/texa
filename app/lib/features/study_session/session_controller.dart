@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:record/record.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
 import '../../core/constants.dart';
@@ -18,8 +19,6 @@ import 'board/board_models.dart';
 import 'playback/playback_engine.dart';
 import 'playback/speech_chunker.dart';
 import 'playback/tts_service.dart';
-import 'playback/wav_builder.dart';
-import 'audio_recorder.dart';
 import 'speech/sherpa_speech.dart';
 import 'board_controller.dart';
 import 'turn_video_encoder/pcm_second_buffer.dart';
@@ -37,20 +36,15 @@ class SessionController extends ChangeNotifier {
     required this.settings,
     required this.speech,
     required this.vadPath,
-  }) {
-    speaker = SpeechSpeaker(
-      synthesise: speech.synthesise,
-      onPlaybackAudio: _feedPlaybackAudio,
-    );
-  }
+  }) : speaker = SpeechSpeaker(synthesise: speech.synthesise);
   final AppDb db;
   Session session;
-  final AppSettings settings;
+  AppSettings settings;
   final SherpaSpeech speech;
   final String? vadPath;
   final BoardController board = BoardController();
   final GlobalKey captureKey = GlobalKey();
-  late final SpeechSpeaker speaker;
+  final SpeechSpeaker speaker;
   TurnState state = TurnState.listening;
   bool micMuted = false;
   bool captionsOn = true;
@@ -75,7 +69,7 @@ class SessionController extends ChangeNotifier {
   /// so [retryTurn] can resend it instead of capturing a new turn.
   _CapturedTurn? _failedTurn;
 
-  final AudioRecorder _recorder = AudioRecorder(sampleRate: _sampleRate);
+  final AudioRecorder _recorder = AudioRecorder();
   sherpa.VoiceActivityDetector? _vad;
   final List<double> _vadBuffer = [];
   StreamSubscription<Uint8List>? _micSub;
@@ -210,9 +204,36 @@ class SessionController extends ChangeNotifier {
   }
 
   // ---------- Microphone / VAD ----------
+  /// Whether the platform recorder supports voice processing (echo
+  /// cancellation, noise suppression, automatic gain).
+  ///
+  /// iOS/Android route capture through the voice-communication stack, so
+  /// voice processing works there. On macOS `record` instead flips the
+  /// `AVAudioEngine` input node into voice-processing mode, which is a
+  /// duplex (input + output) unit: the recorder's engine is input-only,
+  /// the input format changes under its converter, conversion fails and
+  /// the plugin silently stops the stream - no audio is ever delivered.
+  /// There is no `AVAudioSession` on macOS either (the `audio_session`
+  /// plugin's macOS side only stores the configuration), so the setup in
+  /// `main.dart` cannot rescue this; it still matters on iOS/Android.
+  /// Even a patched recorder could not cancel the tutor's voice on macOS:
+  /// the voice-processing unit only cancels audio rendered through its
+  /// own engine, not `just_audio`'s separate player. That is why the
+  /// session screen warns Mac students to use headphones (otherwise Texa
+  /// hears itself and loops) while voice barge-in stays enabled.
+  bool get _voiceProcessingSupported =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.android);
+
   Future<void> startListening() async {
     if (_micRunning || micMuted || _disposed) return;
     try {
+      _hasMicPermission = await _recorder.hasPermission();
+      if (!_hasMicPermission) {
+        notifyListeners();
+        return;
+      }
       if (vadPath != null && _vad == null) {
         try {
           _vad = speech.createVad(vadPath!);
@@ -221,12 +242,16 @@ class SessionController extends ChangeNotifier {
           _vad = null;
         }
       }
-      await _recorder.init();
-      final stream = _recorder.startStreaming();
-      // flutter_recorder has no permission query: reaching here means
-      // the OS granted microphone access, while a denial (or a missing
-      // device) surfaces as an error from init/start instead.
-      _hasMicPermission = true;
+      final stream = await _recorder.startStream(
+        RecordConfig(
+          encoder: AudioEncoder.pcm16bits,
+          sampleRate: _sampleRate,
+          numChannels: 1,
+          echoCancel: _voiceProcessingSupported,
+          noiseSuppress: _voiceProcessingSupported,
+          autoGain: _voiceProcessingSupported,
+        ),
+      );
       _micRunning = true;
       _micSub = stream.listen(
         _onPcm,
@@ -235,23 +260,19 @@ class SessionController extends ChangeNotifier {
     } catch (e) {
       debugPrint('Texa mic start: $e');
       _hasMicPermission = false;
-      _micRunning = false;
     }
     notifyListeners();
   }
 
-  /// Feeds loudspeaker playback to the recorder's software echo
-  /// canceller (macOS/Windows/Linux only; a no-op where the platform
-  /// voice-communication preset handles AEC). The speaker hands over
-  /// complete WAV segments, so strip the header and resample to the
-  /// capture rate the canceller expects.
-  void _feedPlaybackAudio(Uint8List wav) {
-    if (!_recorder.usesSoftwareEchoCancellation) return;
-    final pcm = pcm16MonoFromWav(wav, targetSampleRate: _sampleRate);
-    if (pcm.isNotEmpty) _recorder.feedPlaybackData(pcm);
-  }
-
   bool get hasMicPermission => _hasMicPermission;
+
+  /// Permanently dismisses the macOS headphones notice (the student
+  /// ticked "Don't show again" on it) and persists the choice.
+  Future<void> dismissMacHeadphonesNotice() async {
+    if (settings.macHeadphonesNoticeDismissed) return;
+    settings = settings.copyWith(macHeadphonesNoticeDismissed: true);
+    await db.saveSettings(settings);
+  }
 
   void _onPcm(Uint8List data) {
     // Silero VAD (sherpa-onnx) is the single voice detector on every
@@ -399,8 +420,7 @@ class SessionController extends ChangeNotifier {
   Future<void> _stopMic() async {
     try {
       await _micSub?.cancel();
-      _micSub = null;
-      await _recorder.stopStreaming();
+      await _recorder.stop();
     } catch (_) {}
     _micRunning = false;
   }
@@ -1081,7 +1101,6 @@ class SessionController extends ChangeNotifier {
     _frameTimer?.cancel();
     _silenceTimer?.cancel();
     unawaited(_stopMic());
-    _recorder.dispose();
     unawaited(_turnEncoder?.abort() ?? Future<void>.value());
     unawaited(speaker.stop());
     speaker.dispose();

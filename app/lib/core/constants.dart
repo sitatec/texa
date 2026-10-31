@@ -12,8 +12,8 @@ const int frameWidth = 720;
 const int frameHeight = 540;
 const int vadSilenceMs = 500;
 const int sustainedSpeechMs = 250;
-const int connectTimeoutSeconds = 30;
-const int responseTimeoutSeconds = 120;
+const int connectTimeoutSeconds = 60;
+const int responseTimeoutSeconds = 180;
 
 final isMobile = [
   TargetPlatform.iOS,

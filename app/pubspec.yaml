@@ -21,7 +21,8 @@ dependencies:
   tostore: ^3.6.0
   math_expressions: ^3.2.0
   flutter_math_fork: ^0.7.4
-  flutter_recorder: ^2.0.6
+  record: ^7.1.2
+  audio_session: ^0.2.4
   just_audio: ^0.10.6
   http: ^1.6.0
   path_provider: ^2.1.5

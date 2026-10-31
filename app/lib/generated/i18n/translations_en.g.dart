@@ -248,9 +248,9 @@ class Translations$home$en {
 
   /// Empty-state explanation on Home.
   ///
-  /// en: 'Drop in a document, snap a photo of your problem, or sketch directly on the board—then work through it with Texa.'
+  /// en: 'Drop in a document, snap a photo of your problem, or sketch it directly on the board—then work through it with Texa.'
   String get emptyBody =>
-      'Drop in a document, snap a photo of your problem,\nor sketch directly on the board—then work through it with Texa.';
+      'Drop in a document, snap a photo of your problem,\nor sketch it directly on the board—then work through it with Texa.';
 
   /// Settings button tooltip on Home.
   ///
@@ -480,6 +480,22 @@ class Translations$session$en {
   ///
   /// en: 'Moved view'
   String get movedView => 'Moved view';
+
+  /// Title of the macOS headphones notice shown when a session starts.
+  ///
+  /// en: 'Headphones needed on Mac'
+  String get headphonesTitle => 'Headphones needed on Mac';
+
+  /// Body of the macOS headphones notice shown when a session starts.
+  ///
+  /// en: 'In this version, macOS can't stop Texa from hearing its own voice through your speakers, so it would hear itself and get stuck in a loop. Please use headphones for voice sessions on Mac.'
+  String get headphonesBody =>
+      'In this version, macOS can\'t stop Texa from hearing its own voice through your speakers, so it would hear itself and get stuck in a loop. Please use headphones for voice sessions on Mac.';
+
+  /// Checkbox in the macOS headphones notice that dismisses it permanently.
+  ///
+  /// en: 'Don't show again'
+  String get headphonesDontShowAgain => 'Don\'t show again';
 
   /// Hint shown when microphone permission was denied.
   ///
@@ -864,7 +880,7 @@ extension on Translations {
       'home.title' => 'Texa',
       'home.newSession' => 'New session',
       'home.emptyTitle' => 'Start learning with Texa',
-      'home.emptyBody' => 'Drop in a document, snap a photo of your problem,\nor sketch directly on the board—then work through it with Texa.',
+      'home.emptyBody' => 'Drop in a document, snap a photo of your problem,\nor sketch it directly on the board—then work through it with Texa.',
       'home.settings' => 'Settings',
       'home.deleteSessionTitle' => 'Delete this session?',
       'home.deleteSessionBody' => 'Its board and history will be permanently deleted from this device.',
@@ -909,6 +925,9 @@ extension on Translations {
       'session.removedElement' => 'Removed element',
       'session.pointedAt' => 'Pointed at',
       'session.movedView' => 'Moved view',
+      'session.headphonesTitle' => 'Headphones needed on Mac',
+      'session.headphonesBody' => 'In this version, macOS can\'t stop Texa from hearing its own voice through your speakers, so it would hear itself and get stuck in a loop. Please use headphones for voice sessions on Mac.',
+      'session.headphonesDontShowAgain' => 'Don\'t show again',
       'session.drawOnlyHint' =>
         'Draw-only mode — draw on the board or attach a file, or enable the microphone in Settings.',
       'session.listenHint' => 'I\'m listening — tell me what you\'re doing',

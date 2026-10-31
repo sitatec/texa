@@ -15,16 +15,11 @@ import 'wav_builder.dart';
 /// segments are played as they arrive instead of waiting for the whole
 /// chunk's audio to be generated first.
 class SpeechSpeaker {
-  SpeechSpeaker({required this.synthesise, this.onPlaybackAudio});
+  SpeechSpeaker({required this.synthesise});
 
   /// Synthesises one chunk, streaming a WAV per Kokoro sentence
   /// (Kokoro via sherpa-onnx).
   final Stream<Uint8List> Function(String chunk) synthesise;
-
-  /// Called with each synthesised WAV segment just before it is played,
-  /// so the loudspeaker audio can be fed to an echo canceller as its
-  /// playback reference. Null when nobody needs the reference.
-  final void Function(Uint8List wav)? onPlaybackAudio;
   final AudioPlayer _player = AudioPlayer();
   final ValueNotifier<String?> currentChunk = ValueNotifier<String?>(null);
   final Queue<String> _queue = Queue<String>();
@@ -91,7 +86,6 @@ class SpeechSpeaker {
             interruptedChunk = chunk;
             spoke = true;
           }
-          onPlaybackAudio?.call(wav);
           await _playSegment(wav);
         }
       } catch (e) {

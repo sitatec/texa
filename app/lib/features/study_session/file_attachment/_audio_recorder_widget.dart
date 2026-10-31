@@ -14,9 +14,10 @@ class _RecordingView extends StatefulWidget {
 }
 
 class _RecordingViewState extends State<_RecordingView> {
-  final _recorder = AudioRecorder(sampleRate: 24000);
+  final _recorder = AudioRecorder();
   final _recordedBytes = <int>[];
   final _amplitudeController = StreamController<wf.Amplitude>.broadcast();
+  StreamSubscription<Amplitude>? _amplitudeSub;
   StreamSubscription<Uint8List>? _byteSubscription;
   Timer? _durationTimer;
   Duration _elapsed = Duration.zero;
@@ -33,20 +34,38 @@ class _RecordingViewState extends State<_RecordingView> {
 
   Future<void> _startRecording() async {
     try {
-      // flutter_recorder has no permission query: a denied microphone
-      // surfaces as an error from init/startStreaming instead, which
-      // cancels the recording below just like a refusal did before.
-      await _recorder.init();
-      final byteStream = _recorder.startStreaming();
-
-      if (!mounted) {
-        await _recorder.stopStreaming();
+      final hasPermission = await _recorder.hasPermission();
+      if (!mounted) return;
+      if (!hasPermission) {
+        widget.onCancel();
         return;
       }
-      _byteSubscription = byteStream.listen((bytes) {
-        _recordedBytes.addAll(bytes);
-        _addAmplitude(bytes);
-      });
+
+      _amplitudeSub = _recorder
+          .onAmplitudeChanged(const Duration(milliseconds: 100))
+          .listen((a) {
+            if (!_amplitudeController.isClosed) {
+              _amplitudeController.add(
+                wf.Amplitude(current: a.current.abs(), max: a.max),
+              );
+            }
+          });
+
+      final byteStream = await _recorder.startStream(
+        const RecordConfig(
+          encoder: AudioEncoder.pcm16bits,
+          numChannels: 1,
+          sampleRate: 24000,
+        ),
+      );
+
+      if (!mounted) {
+        await _recorder.stop();
+        return;
+      }
+      _byteSubscription = byteStream.listen(
+        (bytes) => _recordedBytes.addAll(bytes),
+      );
 
       _durationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
         setState(() => _elapsed = Duration(seconds: timer.tick.clamp(0, 120)));
@@ -63,26 +82,13 @@ class _RecordingViewState extends State<_RecordingView> {
     }
   }
 
-  /// Derives the waveform amplitude from the streamed s16le PCM chunk
-  /// itself (flutter_recorder has no separate amplitude stream).
-  void _addAmplitude(Uint8List bytes) {
-    if (_amplitudeController.isClosed || bytes.length < 2) return;
-    final view = ByteData.sublistView(bytes);
-    var peak = 0;
-    for (var i = 0; i + 1 < bytes.length; i += 2) {
-      final sample = view.getInt16(i, Endian.little).abs();
-      if (sample > peak) peak = sample;
-    }
-    final level = peak / 32768.0;
-    _amplitudeController.add(wf.Amplitude(current: level, max: level));
-  }
-
   Future<void> _stopRecording() => _stopFuture ??= _stop();
 
   Future<void> _stop() async {
     _durationTimer?.cancel();
+    _amplitudeSub?.cancel();
     try {
-      await _recorder.stopStreaming();
+      await _recorder.stop();
     } catch (e, stack) {
       _logger.severe('Failed to stop audio recording', e, stack);
       if (mounted) widget.onCancel();
@@ -106,7 +112,8 @@ class _RecordingViewState extends State<_RecordingView> {
   void _cancel() {
     _durationTimer?.cancel();
     _byteSubscription?.cancel();
-    unawaited(_recorder.stopStreaming());
+    _amplitudeSub?.cancel();
+    _recorder.cancel();
     widget.onCancel();
   }
 
@@ -114,6 +121,7 @@ class _RecordingViewState extends State<_RecordingView> {
   void dispose() {
     _durationTimer?.cancel();
     _byteSubscription?.cancel();
+    _amplitudeSub?.cancel();
     _amplitudeController.close();
     _recorder.dispose();
     super.dispose();

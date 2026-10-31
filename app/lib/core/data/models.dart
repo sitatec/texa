@@ -11,12 +11,17 @@ class AppSettings {
     this.apiKey = '',
     this.captionsDefault = true,
     this.micPermissionDenied = false,
+    this.macHeadphonesNoticeDismissed = false,
     this.setupComplete = false,
     this.ttsEngine,
   });
   final String apiKey;
   final bool captionsDefault;
   final bool micPermissionDenied;
+
+  /// True once the student ticked "Don't show again" on the macOS
+  /// headphones notice; the session screen then never shows it.
+  final bool macHeadphonesNoticeDismissed;
   final bool setupComplete;
 
   /// Voice engine explicitly chosen by the user, or null when they
@@ -33,18 +38,22 @@ class AppSettings {
     String? apiKey,
     bool? captionsDefault,
     bool? micPermissionDenied,
+    bool? macHeadphonesNoticeDismissed,
     bool? setupComplete,
     TtsEngine? ttsEngine,
   }) => AppSettings(
     apiKey: apiKey ?? this.apiKey,
     captionsDefault: captionsDefault ?? this.captionsDefault,
     micPermissionDenied: micPermissionDenied ?? this.micPermissionDenied,
+    macHeadphonesNoticeDismissed:
+        macHeadphonesNoticeDismissed ?? this.macHeadphonesNoticeDismissed,
     setupComplete: setupComplete ?? this.setupComplete,
     ttsEngine: ttsEngine ?? this.ttsEngine,
   );
   Map<String, Object?> toJson() => {
     'captionsDefault': captionsDefault,
     'micPermissionDenied': micPermissionDenied,
+    'macHeadphonesNoticeDismissed': macHeadphonesNoticeDismissed,
     'setupComplete': setupComplete,
     'ttsEngine': ttsEngine?.name,
   };
@@ -52,6 +61,8 @@ class AppSettings {
     apiKey: j['apiKey'] as String? ?? '',
     captionsDefault: j['captionsDefault'] as bool? ?? true,
     micPermissionDenied: j['micPermissionDenied'] as bool? ?? false,
+    macHeadphonesNoticeDismissed:
+        j['macHeadphonesNoticeDismissed'] as bool? ?? false,
     setupComplete: j['setupComplete'] as bool? ?? false,
     ttsEngine: TtsEngine.values.asNameMap()[j['ttsEngine']],
   );

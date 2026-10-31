@@ -82,7 +82,7 @@ class SessionHistoryEntry extends StatelessWidget {
           if (video != null && video.isNotEmpty) ...[
             const SizedBox(height: 8),
             SizedBox(
-              height: 360,
+              height: 250,
               child: TurnVideoPlayer(
                 key: ValueKey('history-video-${m.id}'),
                 base64Video: video,
