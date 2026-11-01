@@ -102,6 +102,7 @@ List<Map<String, dynamic>> toolSchemas() {
     'parameters': params,
   };
   return [
+    {"type": "web_search", "search_context_size": "low"},
     tool(
       'write_text',
       'Write SHORT plain text on the board: a label, a heading, or a few short lines. Never write sentences or paragraphs on the board - say those in explanation_speech instead. If the content needs more than one line, put line breaks directly in the text of a SINGLE write_text call ("line1\\nline2\\nline3") - never make separate write_text calls just to stack lines; that wastes calls and adds latency. The app measures the text (line breaks included) and wraps it at the board edge, so you do not need to supply width or height.',
