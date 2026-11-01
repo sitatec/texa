@@ -36,12 +36,14 @@ class SessionController extends ChangeNotifier {
     required this.settings,
     required this.speech,
     required this.vadPath,
+    this.smartTurnPath,
   }) : speaker = SpeechSpeaker(synthesise: speech.synthesise);
   final AppDb db;
   Session session;
   AppSettings settings;
   final SherpaSpeech speech;
   final String? vadPath;
+  final String? smartTurnPath;
   final BoardController board = BoardController();
   final GlobalKey captureKey = GlobalKey();
   final SpeechSpeaker speaker;

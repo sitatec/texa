@@ -60,10 +60,6 @@ class _SessionScreenState extends State<SessionScreen> {
   @override
   void initState() {
     super.initState();
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
     _fullScreenManager.listenToFullScreenChange((type) {
       if (type == .enterFullScreen) {
         _fullscreen = true;

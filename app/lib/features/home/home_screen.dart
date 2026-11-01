@@ -166,6 +166,7 @@ class HomeScreen extends StatelessWidget {
       settings: app.settings,
       speech: app.speech,
       vadPath: await app.sileroVadPath(),
+      smartTurnPath: await app.smartTurnPath(),
     );
     if (!context.mounted) return;
     await Navigator.push(

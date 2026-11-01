@@ -393,7 +393,7 @@ class BoardController extends ChangeNotifier {
                   x: n('x', 60),
                   y: n('y', 60),
                   text: a['text'] as String? ?? '',
-                  fontSize: n('size', 38),
+                  fontSize: n('size', 30),
                   requestedWidth: (a['width'] as num?)?.toDouble(),
                 )
               : clampToBoard(
@@ -430,7 +430,7 @@ class BoardController extends ChangeNotifier {
               a['color'] as String?,
               const Color(0xFF1F2937),
             ),
-            size: n('size', 38),
+            size: n('size', 30),
             progress: 0,
           );
           elements.removeWhere((e) => e.id == id && e.owner == BoardOwner.ai);

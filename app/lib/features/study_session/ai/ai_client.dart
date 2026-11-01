@@ -470,7 +470,10 @@ class AiClient {
         try {
           outcome = await executeToolCall(call.name, call.args);
         } catch (e) {
-          outcome = AiToolResult.failure('The action failed: $e');
+          debugPrint('Failed to execute tool call $call: $e');
+          outcome = AiToolResult.failure(
+            'The action failed: ${e.toString().substring(0, 200)}',
+          );
         }
         final entry = roundCalls.firstWhere(
           (c) => call.callId.isNotEmpty

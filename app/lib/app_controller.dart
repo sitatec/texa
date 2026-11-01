@@ -70,6 +70,15 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  /// Path to the installed Smart Turn model, when provisioned.
+  Future<String?> smartTurnPath() async {
+    try {
+      return await provisioning.isVadReady ? await provisioning.smartTurnPath : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> saveMemory(String text) async {
     memoryText = text;
     await db.saveMemory(text);

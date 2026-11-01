@@ -4,16 +4,13 @@ import '../ai/ai_actions.dart';
 class SuspendedPlayback {
   const SuspendedPlayback({
     required this.remaining,
-    required this.interruptedActionIndex,
     required this.interruptedSpeechChunk,
     required this.completedActions,
   });
   final List<PlaybackItem> remaining;
-  final int interruptedActionIndex;
   final String? interruptedSpeechChunk;
   final List<Map<String, Object?>> completedActions;
   Map<String, dynamic> toContext() => {
-    'interruptedActionIndex': interruptedActionIndex,
     'interruptedSpeechChunk': interruptedSpeechChunk,
     'completedActions': completedActions,
     'suspendedStepsRemaining': remaining.length,
@@ -51,7 +48,6 @@ class PlaybackQueue {
     ];
     return SuspendedPlayback(
       remaining: remaining,
-      interruptedActionIndex: currentIndex,
       interruptedSpeechChunk: interruptedChunk,
       completedActions: List.of(completed),
     );

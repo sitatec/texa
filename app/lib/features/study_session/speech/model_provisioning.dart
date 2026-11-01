@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../../../core/constants.dart';
@@ -110,8 +111,8 @@ class ModelProvisioningService {
   Future<String> get vadPath async {
     await _store.activate();
     return _store.pathFor('silero_vad.onnx');
-  }  
-  
+  }
+
   Future<String> get smartTurnPath async {
     await _store.activate();
     return _store.pathFor('smart-turn-v3.2-int8.onnx');
@@ -219,6 +220,10 @@ class ModelProvisioningService {
     String label,
     void Function(double) onProgress,
   ) async {
+    if (kDebugMode && defaultTargetPlatform == .android) {
+      url = url.replaceFirst('localhost', '10.0.2.2');
+    }
+
     final res = await _client.send(http.Request('GET', Uri.parse(url)));
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw StateError('Download failed for $label (${res.statusCode}).');

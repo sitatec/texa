@@ -250,7 +250,7 @@ List<Map<String, dynamic>> toolSchemas() {
     ),
     tool(
       'resume_explanation',
-      'Resume a suspended explanation after answering an interruption.',
+      'Resume a suspended explanation after answering an interruption. You should let the user know that you are continue explanation instead of just jumping which could be confusing.',
       props([], {}),
     ),
   ];

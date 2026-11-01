@@ -3,6 +3,7 @@ import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
+import 'package:texa/core/constants.dart';
 import 'package:texa/features/study_session/speech/model_store.dart';
 
 import '../../../core/data/models.dart';
@@ -179,9 +180,9 @@ class TtsWorker {
                     lexicon: setup.lexicon,
                   )
                 : const sherpa.OfflineTtsVitsModelConfig(),
-            numThreads: setup.engine == TtsEngine.kokoro
-                ? getOptimalThreads()
-                : 1,
+            numThreads: setup.engine == TtsEngine.piper && !isMobile
+                ? 1 // For piper on desktop 1 thread is enough, more may even slow down perf due to context switching overhead
+                : getOptimalThreads(),
             debug: setup.debug,
           ),
           // One sentence per batch, so the callback below delivers

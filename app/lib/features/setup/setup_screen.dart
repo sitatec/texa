@@ -238,7 +238,7 @@ class _SetupScreenState extends State<SetupScreen> {
       final ttsOk = await widget.app.tryInitSpeech();
       if (!vadOk || !ttsOk) {
         throw StateError(
-          'Speech models downloaded but did not initialise on this device.',
+          'Speech models downloaded but did not initialise on this device. Voice Activity Detector: $vadOk | Text To Speech Model: $ttsOk',
         );
       }
       await widget.app.saveSettings(
