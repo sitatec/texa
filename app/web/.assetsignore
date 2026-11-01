@@ -1,0 +1,7 @@
+_worker.js
+_routes.json
+.DS_Store
+wrangler.jsonc
+.wrangler
+.assetsignore
+*.map

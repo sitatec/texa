@@ -1,0 +1,38 @@
+{
+	"compatibility_date": "2026-05-12",
+	"compatibility_flags": [
+		"global_fetch_strictly_public"
+	],
+	"name": "app",
+	"preview_urls": false,
+	"workers_dev": false,
+	"upload_source_maps": true,
+	"assets": {
+		"directory": "./", // Thi file will be moved to the build dir with all the app files.
+		"not_found_handling": "single-page-application",
+		"html_handling": "drop-trailing-slash"
+	},
+	"observability": {
+		"enabled": true
+	},
+	"env": {
+		"production": {
+			"route": {
+				"custom_domain": true,
+				"pattern": "texa.berete.dev"
+			}
+		},
+		"staging": {
+			"route": {
+				"custom_domain": true,
+				"pattern": "staging.texa.berete.dev"
+			}
+		},
+		"dev": {
+			"route": {
+				"custom_domain": true,
+				"pattern": "dev.texa.berete.dev"
+			}
+		}
+	}
+}
