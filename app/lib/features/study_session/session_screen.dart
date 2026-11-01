@@ -78,7 +78,7 @@ class _SessionScreenState extends State<SessionScreen> {
     // Skipped entirely once they ticked "Don't show again" on it.
     if (!_macHeadphonesNoticeShown &&
         !c.settings.macHeadphonesNoticeDismissed &&
-        defaultTargetPlatform == TargetPlatform.macOS) {
+        (defaultTargetPlatform == TargetPlatform.macOS && !kIsWeb)) {
       _macHeadphonesNoticeShown = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) unawaited(_showMacHeadphonesNotice());

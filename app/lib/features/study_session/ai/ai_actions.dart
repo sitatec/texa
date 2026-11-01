@@ -19,7 +19,7 @@ class ActionItem extends PlaybackItem {
   final String tool;
   final Map<String, dynamic> args;
   @override
-  String? get speech => args['accompanying_speech'] as String?;
+  String? get speech => args['explanation_speech'] as String?;
   String? get elementId => args['element_id'] as String?;
 }
 
@@ -104,7 +104,7 @@ List<Map<String, dynamic>> toolSchemas() {
   return [
     tool(
       'write_text',
-      'Write SHORT plain text on the board: a label, a heading, or a few short lines. Never write sentences or paragraphs on the board - say those in accompanying_speech instead. If the content needs more than one line, put line breaks directly in the text of a SINGLE write_text call ("line1\\nline2\\nline3") - never make separate write_text calls just to stack lines; that wastes calls and adds latency. The app measures the text (line breaks included) and wraps it at the board edge, so you do not need to supply width or height.',
+      'Write SHORT plain text on the board: a label, a heading, or a few short lines. Never write sentences or paragraphs on the board - say those in explanation_speech instead. If the content needs more than one line, put line breaks directly in the text of a SINGLE write_text call ("line1\\nline2\\nline3") - never make separate write_text calls just to stack lines; that wastes calls and adds latency. The app measures the text (line breaks included) and wraps it at the board edge, so you do not need to supply width or height.',
       props(
         ['element_id', 'x', 'y', 'text'],
         {
@@ -117,7 +117,7 @@ List<Map<String, dynamic>> toolSchemas() {
           },
           'size': num,
           'color': str,
-          'accompanying_speech': speech,
+          'explanation_speech': speech,
         },
       ),
     ),
@@ -133,7 +133,7 @@ List<Map<String, dynamic>> toolSchemas() {
           'latex': str,
           'size': num,
           'color': str,
-          'accompanying_speech': speech,
+          'explanation_speech': speech,
         },
       ),
     ),
@@ -149,7 +149,7 @@ List<Map<String, dynamic>> toolSchemas() {
           'width': num,
           'height': num,
           'svg': str,
-          'accompanying_speech': speech,
+          'explanation_speech': speech,
         },
       ),
     ),
@@ -179,7 +179,7 @@ List<Map<String, dynamic>> toolSchemas() {
           'y_min': num,
           'y_max': num,
           'color': str,
-          'accompanying_speech': speech,
+          'explanation_speech': speech,
         },
       ),
     ),
@@ -196,7 +196,7 @@ List<Map<String, dynamic>> toolSchemas() {
             'description': 'Landmark names to compute and mark, e.g. ["vertex"], ["circumcenter", "centroid"], ["roots", "y_intercept"].',
           },
           'color': str,
-          'accompanying_speech': speech,
+          'explanation_speech': speech,
         },
       ),
     ),
@@ -215,14 +215,14 @@ List<Map<String, dynamic>> toolSchemas() {
           'latex': str,
           'svg': str,
           'expression': str,
-          'accompanying_speech': speech,
+          'explanation_speech': speech,
         },
       ),
     ),
     tool(
       'remove_element',
       'Remove one of your own elements by element_id.',
-      props(['element_id'], {'element_id': id, 'accompanying_speech': speech}),
+      props(['element_id'], {'element_id': id, 'explanation_speech': speech}),
     ),
     tool(
       'point_at',
@@ -232,7 +232,7 @@ List<Map<String, dynamic>> toolSchemas() {
         'y': num,
         'element_id': id,
         'label': str,
-        'accompanying_speech': speech,
+        'explanation_speech': speech,
       }),
     ),
     tool(
@@ -245,7 +245,7 @@ List<Map<String, dynamic>> toolSchemas() {
         'height': num,
         'zoom': num,
         'element_id': id,
-        'accompanying_speech': speech,
+        'explanation_speech': speech,
       }),
     ),
     tool(

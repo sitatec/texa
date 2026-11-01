@@ -224,9 +224,9 @@ class SessionController extends ChangeNotifier {
   /// session screen warns Mac students to use headphones (otherwise Texa
   /// hears itself and loops) while voice barge-in stays enabled.
   bool get _voiceProcessingSupported =>
-      !kIsWeb &&
-      (defaultTargetPlatform == TargetPlatform.iOS ||
-          defaultTargetPlatform == TargetPlatform.android);
+      kIsWeb ||
+      defaultTargetPlatform == TargetPlatform.iOS ||
+      defaultTargetPlatform == TargetPlatform.android;
 
   Future<void> startListening() async {
     if (_micRunning || micMuted || _disposed) return;

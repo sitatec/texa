@@ -679,6 +679,7 @@ class AiClient {
     } on AppError {
       rethrow;
     } catch (e) {
+      debugPrint("Meta AI API call failed: $e");
       throw AppError(
         'Could not reach Meta AI. Check your connection and retry your turn.',
         cause: e,

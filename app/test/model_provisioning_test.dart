@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:texa/features/study_session/speech/model_provisioning.dart';
-import 'package:texa/features/study_session/speech/model_store.dart';
+import 'package:texa/features/study_session/speech/model_store/model_store.dart';
 import 'package:texa/core/data/models.dart';
 
 class _FakeStore implements ModelStore {
@@ -31,7 +31,7 @@ class _FakeStore implements ModelStore {
   }
 
   @override
-  Future<void> activate() async {
+  Future<void> activate([Iterable<String> files = const []]) async {
     activated = true;
   }
 }
