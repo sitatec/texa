@@ -106,7 +106,7 @@ class TexaInputFileWidget extends StatefulWidget {
     this.onChanged,
     this.supportedFileTypes = const [
       TexaFileType.image,
-      TexaFileType.video,
+      // TexaFileType.video, exclude videos to leave room for user's whiteboard recorded video inputs
       TexaFileType.audio,
       TexaFileType.document,
     ],

@@ -67,6 +67,7 @@ class SessionHistoryEntry extends StatelessWidget {
     final isAi = m.role == 'ai';
     final text = m.payload['text'] as String? ?? '';
     final video = isAi ? null : m.payload['videoBase64'] as String?;
+    final transcript = isAi ? null : m.payload['transcript'] as String?;
     final calls = m.payload['toolCalls'];
     return ListTile(
       leading: Icon(isAi ? Symbols.auto_awesome : Symbols.person_outline),
@@ -88,6 +89,13 @@ class SessionHistoryEntry extends StatelessWidget {
                 base64Video: video,
                 messageId: m.id,
               ),
+            ),
+          ],
+          if (transcript != null && transcript.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              transcript,
+              style: const TextStyle(fontSize: 13, color: Colors.black54),
             ),
           ],
         ],

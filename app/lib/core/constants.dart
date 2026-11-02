@@ -20,6 +20,11 @@ const int sustainedSpeechMs = 250;
 const int connectTimeoutSeconds = 60;
 const int responseTimeoutSeconds = 180;
 
+/// Maximum number of student turn-videos sent in one tutor request.
+/// Meta AI allows 5 videos per request; Texa keeps one spare slot as a
+/// safety margin. Older student turns are sent as transcripts instead.
+const int maxVideoTurnsPerRequest = 4;
+
 final isMobile = [
   TargetPlatform.iOS,
   TargetPlatform.android,

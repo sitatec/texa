@@ -10,6 +10,7 @@ import '../../../core/errors.dart';
 import '../../../core/data/models.dart';
 import 'ai_actions.dart';
 import 'system_prompt.dart';
+import 'video_transcription_prompt.dart';
 
 /// One event from the streamed AI reply.
 sealed class AiEvent {}
@@ -172,6 +173,70 @@ class AiClient {
   final String apiKey;
   final http.Client _client;
   final OpenAIClient _openAi;
+
+  /// Whether [message] is a saved student turn that was sent (or is to
+  /// be sent) as a turn-video. Such messages keep their video bytes in
+  /// `videoBase64` for local history playback forever; whether the
+  /// video or its transcript goes on the wire is decided per request.
+  static bool isStudentVideoTurn(ChatMessage message) =>
+      message.role != 'ai' &&
+      (message.payload['videoBase64'] as String?)?.isNotEmpty == true;
+
+  /// All student video turns in [history], oldest first.
+  static List<ChatMessage> studentVideoTurns(List<ChatMessage> history) =>
+      history.where(isStudentVideoTurn).toList();
+
+  /// The persisted transcript of a student video turn, or null when it
+  /// has not been transcribed (yet / successfully).
+  static String? transcriptOf(ChatMessage message) {
+    final transcript = message.payload['transcript'];
+    return transcript is String && transcript.trim().isNotEmpty
+        ? transcript.trim()
+        : null;
+  }
+
+  /// Transcribes one student turn-video with [model] into the
+  /// self-contained written record described by
+  /// [kVideoTranscriptionPrompt]. A single, tool-less, non-stored
+  /// request carrying exactly one video: it never touches the tutor
+  /// conversation chain. Throws [AppError] on failure or empty output;
+  /// callers that transcribe in the background must catch it.
+  Future<String> transcribeVideo({
+    required String model,
+    required String videoBase64,
+  }) async {
+    _ResponseRound? completed;
+    await for (final event in _streamOneResponse(
+      model: model,
+      instructions: kVideoTranscriptionPrompt,
+      input: [
+        {
+          'role': 'user',
+          'content': [
+            {
+              'type': 'input_video',
+              'video_url': 'data:video/mp4;base64,$videoBase64',
+            },
+          ],
+        },
+      ],
+      previousResponseId: null,
+      reasoningEffort: null,
+      allowTools: false,
+      storeResponse: false,
+      includeTools: false,
+    )) {
+      if (event is _ResponseRound) completed = event;
+    }
+    if (_closed) {
+      throw const AppError('Transcription was cancelled.');
+    }
+    final text = completed?.text.trim() ?? '';
+    if (text.isEmpty) {
+      throw const AppError('Transcription returned an empty record.');
+    }
+    return text;
+  }
 
   /// Set by [close]. A closed client must never start another round of
   /// the agentic loop: after an interrupt the tool outputs of the round
@@ -349,12 +414,66 @@ class AiClient {
     }
 
     final input = <Map<String, dynamic>>[];
+    // Superseded-turn videos that are already saved in [history] are
+    // replayed below as their own turns; only ones the history does
+    // not know about ride along inside this turn's message.
+    final historyVideoBytes = {
+      for (final m in history.where(isStudentVideoTurn))
+        m.payload['videoBase64'] as String,
+    };
+    final effectivePriorVideos = includeHistory
+        ? priorVideosBase64
+              .where((v) => !historyVideoBytes.contains(v))
+              .toList()
+        : priorVideosBase64;
+    // This turn's message always carries one board video (plus any
+    // superseded videos the history does not hold and any uploaded
+    // videos); the remaining video budget is spent on the newest
+    // earlier turns. Every older video turn is sent as its transcript.
+    final videosInCurrentMessage =
+        1 +
+        effectivePriorVideos.length +
+        uploads
+            .where(
+              (u) => u.hasBase64 && !u.hasText && u.kind == AiUploadKind.video,
+            )
+            .length;
+    final retainedVideoBudget =
+        maxVideoTurnsPerRequest - videosInCurrentMessage;
+    // Index (into [history]) of this turn's own saved message: it is
+    // sent once, as the final message below, not again in the replay.
+    var currentIndex = -1;
+    for (var i = history.length - 1; i >= 0; i--) {
+      if (isStudentVideoTurn(history[i]) &&
+          history[i].payload['videoBase64'] == videoBase64) {
+        currentIndex = i;
+        break;
+      }
+    }
+    final earlierVideoIndices = [
+      for (var i = 0; i < history.length; i++)
+        if (i != currentIndex && isStudentVideoTurn(history[i])) i,
+    ];
+    final retainedVideoIndices = retainedVideoBudget <= 0
+        ? const <int>{}
+        : earlierVideoIndices
+              .skip(
+                earlierVideoIndices.length > retainedVideoBudget
+                    ? earlierVideoIndices.length - retainedVideoBudget
+                    : 0,
+              )
+              .toSet();
     // With a stored previous response the server already holds the whole
     // conversation, so only this turn's new input is sent. The full
-    // replay below is only the bootstrap for sessions that have no
-    // stored response id yet (new or legacy sessions).
+    // replay below is the bootstrap for sessions that have no stored
+    // response id yet (new or legacy sessions) and - once the video
+    // window is active - the only way to replace older videos with
+    // transcripts, since a chained request keeps every video the
+    // server has ever stored for the chain (see [streamTurn]).
     if (includeHistory) {
-      for (final m in history) {
+      for (var index = 0; index < history.length; index++) {
+        final m = history[index];
+        if (index == currentIndex) continue;
         if (m.role == 'ai') {
           final p = m.payload;
           final text = (p['text'] as String? ?? '').trim();
@@ -395,6 +514,38 @@ class AiClient {
               });
             }
           }
+        } else if (isStudentVideoTurn(m)) {
+          final video = m.payload['videoBase64'] as String;
+          if (retainedVideoIndices.contains(index)) {
+            input.add({
+              'role': 'user',
+              'content': [
+                {
+                  'type': 'input_video',
+                  'video_url': 'data:video/mp4;base64,$video',
+                },
+              ],
+            });
+          } else {
+            // Aged out of the video window: only its transcript is
+            // sent. The session controller transcribes ahead of this
+            // moment; a missing transcript (failed transcription, or a
+            // caller that never ran one) degrades to an explicit
+            // marker instead of silently re-sending the video and
+            // breaking the per-request video limit.
+            final transcript = transcriptOf(m);
+            input.add({
+              'role': 'user',
+              'content': [
+                {
+                  'type': 'input_text',
+                  'text': transcript != null
+                      ? '[Transcript of an earlier student turn - originally a board-and-voice video, transcribed because only the newest turns are sent as video. The quoted words are the student\'s own; the surrounding descriptions record what was on the board and what the student pointed at or did.]\n$transcript'
+                      : '[An earlier student turn was given as a board-and-voice video. Its transcript is unavailable, so its exact content could not be included here. Rely on the surrounding conversation and the current board, and ask the student if that turn matters.]',
+                },
+              ],
+            });
+          }
         } else if ((m.payload['text'] as String?)?.isNotEmpty == true) {
           input.add({'role': 'user', 'content': m.payload['text'] as String});
         }
@@ -427,7 +578,7 @@ class AiClient {
       // produced anything (interrupted while thinking): they were
       // never answered, so they ride along *before* this turn's own
       // content and the model answers them together with it.
-      for (final prior in priorVideosBase64)
+      for (final prior in effectivePriorVideos)
         {'type': 'input_video', 'video_url': 'data:video/mp4;base64,$prior'},
       if (context.isNotEmpty)
         {'type': 'input_text', 'text': context.toString()},
@@ -463,11 +614,17 @@ class AiClient {
   /// Streams one turn, running the agentic tool loop when
   /// [executeToolCall] is given.
   ///
-  /// Every request is sent with `store: true`. When a previous stored
-  /// response is known (passed explicitly or found in the saved AI
-  /// messages in [history]) only this turn's new input plus
+  /// Every tutor request is sent with `store: true`. When a previous
+  /// stored response is known (passed explicitly or found in the saved
+  /// AI messages in [history]) only this turn's new input plus
   /// `previous_response_id` is sent - the history itself is never
-  /// replayed. Each response that asks for tool calls has every call
+  /// replayed. That chaining is only used while the whole session fits
+  /// in the video window ([maxVideoTurnsPerRequest] student videos):
+  /// a chained request keeps every video ever stored on the chain, so
+  /// past the window every turn instead replays the local history -
+  /// transcripts for older student turns, videos for the newest ones -
+  /// with no `previous_response_id`, and the fresh response becomes
+  /// the (unchained-from) record of that turn. Each response that asks for tool calls has every call
   /// performed through [executeToolCall] and its outcome sent straight
   /// back as a `function_call_output` chained on that response's id, so
   /// the model can keep calling tools step by step (draw, look at the
@@ -491,7 +648,15 @@ class AiClient {
     int maxToolRounds = 10,
     List<String> priorVideosBase64 = const [],
   }) async* {
-    var previousId = previousResponseId ?? latestResponseId(history);
+    final currentInHistory = history.any(
+      (m) => isStudentVideoTurn(m) && m.payload['videoBase64'] == videoBase64,
+    );
+    final videoTurnCount =
+        studentVideoTurns(history).length + (currentInHistory ? 0 : 1);
+    final chainedId = previousResponseId ?? latestResponseId(history);
+    final useChain =
+        chainedId != null && videoTurnCount <= maxVideoTurnsPerRequest;
+    var previousId = useChain ? chainedId : null;
     final request = _requestInput(
       history: history,
       videoBase64: videoBase64,
@@ -501,7 +666,7 @@ class AiClient {
       currentObservation: currentObservation,
       uploads: uploads,
       extraContext: extraContext,
-      includeHistory: previousId == null,
+      includeHistory: !useChain,
       priorVideosBase64: priorVideosBase64,
     );
 
@@ -630,6 +795,8 @@ class AiClient {
     required String? previousResponseId,
     required String? reasoningEffort,
     required bool allowTools,
+    bool storeResponse = true,
+    bool includeTools = true,
   }) async* {
     final fullText = StringBuffer();
     final argBuffers = <String, StringBuffer>{};
@@ -702,10 +869,10 @@ class AiClient {
               model: model,
               instructions: instructions,
               input: input,
-              store: true,
+              store: storeResponse,
               previousResponseId: previousResponseId,
-              tools: toolSchemas(),
-              toolChoice: allowTools ? 'auto' : 'none',
+              tools: includeTools ? toolSchemas() : null,
+              toolChoice: includeTools ? (allowTools ? 'auto' : 'none') : null,
               reasoning: reasoningEffort == null
                   ? null
                   : {'effort': reasoningEffort},

@@ -87,6 +87,139 @@ void main() {
     });
   });
 
+  group('video window and transcription', () {
+    ChatMessage videoTurn(int n, {String? transcript}) {
+      return ChatMessage(
+        id: 's$n',
+        sessionId: 's1',
+        role: 'student',
+        kind: 'video-turn',
+        payloadJson: jsonEncode({
+          'hasVideo': true,
+          'videoBase64': 'V$n',
+          'transcript': ?transcript,
+          'transcriptionStatus': ?(transcript == null ? null : 'done'),
+        }),
+        createdAt: DateTime(2026, 1, n),
+      );
+    }
+
+    ChatMessage aiTurn(int n) => ChatMessage(
+      id: 'a$n',
+      sessionId: 's1',
+      role: 'ai',
+      kind: 'text',
+      payloadJson: jsonEncode({
+        'text': 'Reply $n',
+        if (n == 5) 'responseId': 'resp_old',
+      }),
+      createdAt: DateTime(2026, 1, n),
+    );
+
+    List<Map<String, dynamic>> userParts(Map<String, dynamic> body) => [
+      for (final item in body['input'] as List)
+        if (item is Map && item['role'] == 'user')
+          ...(item['content'] is List
+              ? (item['content'] as List).cast<Map<String, dynamic>>()
+              : [
+                  {'type': 'input_text', 'text': item['content'].toString()},
+                ]),
+    ];
+
+    test('past four video turns the chain is broken and older turns are '
+        'sent as transcripts', () async {
+      final h = harness(
+        sse: 'data: {"type":"response.output_text.delta","delta":"hi"}\n\ndata: [DONE]\n\n',
+      );
+      final client = AiClient('key', client: h.client);
+      final history = <ChatMessage>[
+        for (var n = 1; n <= 5; n++) ...[
+          videoTurn(n, transcript: n <= 2 ? 'Transcript $n' : null),
+          if (n < 6) aiTurn(n),
+        ],
+        videoTurn(6, transcript: null),
+      ];
+      // Six video turns in total: current is V6, so V1-V2 are
+      // transcripts and V3-V6 are the four retained videos - despite
+      // a stored response id being available.
+      await client
+          .streamTurn(model: 'test-model', history: history, videoBase64: 'V6')
+          .toList();
+      final body = h.lastBody();
+      expect(body.containsKey('previous_response_id'), isFalse);
+      expect(body['instructions'], contains('TRANSCRIPTS'));
+      final parts = userParts(body);
+      expect(
+        parts
+            .where((c) => c['type'] == 'input_video')
+            .map((c) => c['video_url']),
+        [
+          'data:video/mp4;base64,V3',
+          'data:video/mp4;base64,V4',
+          'data:video/mp4;base64,V5',
+          'data:video/mp4;base64,V6',
+        ],
+      );
+      final texts = parts
+          .where((c) => c['type'] == 'input_text')
+          .map((c) => c['text'])
+          .join('\n');
+      expect(texts, contains('Transcript 1'));
+      expect(texts, contains('Transcript 2'));
+      expect(texts, contains('Transcript of an earlier student turn'));
+    });
+
+    test('an aged-out turn without a transcript degrades to a marker, '
+        'never back to video', () async {
+      final h = harness(
+        sse: 'data: {"type":"response.output_text.delta","delta":"hi"}\n\ndata: [DONE]\n\n',
+      );
+      final client = AiClient('key', client: h.client);
+      await client
+          .streamTurn(
+            model: 'test-model',
+            history: [
+              for (var n = 1; n <= 6; n++)
+                videoTurn(n, transcript: n == 1 ? 'Transcript 1' : null),
+            ],
+            videoBase64: 'V6',
+          )
+          .toList();
+      final parts = userParts(h.lastBody());
+      expect(parts.where((c) => c['type'] == 'input_video'), hasLength(4));
+      expect(
+        parts
+            .where((c) => c['type'] == 'input_text')
+            .map((c) => c['text'])
+            .join('\n'),
+        contains('transcript is unavailable'),
+      );
+    });
+
+    test('transcribeVideo sends one tool-less, non-stored video', () async {
+      final h = harness(
+        sse: 'data: {"type":"response.output_text.delta","delta":"SPEECH: hello"}\n\ndata: [DONE]\n\n',
+      );
+      final client = AiClient('key', client: h.client);
+      final transcript = await client.transcribeVideo(
+        model: 'test-model',
+        videoBase64: 'ONLYVIDEO',
+      );
+      expect(transcript, 'SPEECH: hello');
+      final body = h.lastBody();
+      expect(body['store'], isFalse);
+      expect(body.containsKey('previous_response_id'), isFalse);
+      expect(body.containsKey('tools'), isFalse);
+      expect(body['instructions'], contains('DEIXIS'));
+      expect(body['instructions'], contains('from here to here'));
+      final input = body['input'] as List;
+      expect(input, hasLength(1));
+      expect((input.single as Map)['content'], [
+        {'type': 'input_video', 'video_url': 'data:video/mp4;base64,ONLYVIDEO'},
+      ]);
+    });
+  });
+
   group('upload request parts', () {
     test('image, video, audio and document use different parts', () async {
       final h = harness(

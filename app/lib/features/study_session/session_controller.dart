@@ -87,6 +87,27 @@ class SessionController extends ChangeNotifier {
   List<SessionObservation> observations = [];
   String sessionObservation = '';
 
+  /// Background turn-video transcriptions, by student message id.
+  /// Each job runs on its own [AiClient], so interrupting or closing
+  /// the active tutor turn never cancels one, and vice versa.
+  final Map<String, Future<bool>> _transcriptionJobs = {};
+  bool _transcriptionSweepRunning = false;
+
+  /// Serializes whole-history saves. A background transcription and
+  /// the tutor turn can both finish (and persist) at the same time;
+  /// chaining the saves - each over a snapshot - keeps their upserts
+  /// from interleaving over the live, still-growing [messages] list.
+  Future<void> _messageSaveChain = Future<void>.value();
+
+  Future<void> _saveMessages() {
+    final snapshot = List<ChatMessage>.of(messages);
+    final save = _messageSaveChain.then(
+      (_) => db.saveMessages(session.id, snapshot),
+    );
+    _messageSaveChain = save.then((_) {}, onError: (_, _) {});
+    return save;
+  }
+
   /// Tool calls queued for playback whose outcome the AI client is
   /// waiting on, keyed by their queued item. Completed by the playback
   /// consumer as soon as the action has actually been performed (or
@@ -177,7 +198,149 @@ class SessionController extends ChangeNotifier {
         '';
     board.restore(BoardSnapshot.decode(await db.loadBoard(session.id)));
     board.addListener(_scheduleSave);
+    _scheduleResumeTranscriptions();
     if (!settings.micPermissionDenied) await startListening();
+  }
+
+  // ---------- Turn-video transcription ----------
+  //
+  // Only the newest [maxVideoTurnsPerRequest] student turns can be
+  // sent to Meta AI as video; older turns go as transcripts (see
+  // AiClient). Transcription is transcribe-ahead: the oldest retained
+  // video is transcribed in the background while its turn is still
+  // being answered, so the transcript is already persisted when the
+  // next turn pushes that video out of the window.
+
+  /// Replaces the payload of the message with [id], keeping its
+  /// identity, role, kind and timestamp. Returns false when the
+  /// message is no longer in the history.
+  bool _updateMessagePayload(String id, Map<String, dynamic> updates) {
+    final index = messages.indexWhere((m) => m.id == id);
+    if (index < 0) return false;
+    final old = messages[index];
+    messages[index] = ChatMessage(
+      id: old.id,
+      sessionId: old.sessionId,
+      role: old.role,
+      kind: old.kind,
+      payloadJson: jsonEncode({...old.payload, ...updates}),
+      createdAt: old.createdAt,
+    );
+    return true;
+  }
+
+  /// Ensures [message]'s video has a persisted transcript, joining an
+  /// in-flight job for the same message when there is one. Resolves
+  /// true when a transcript is stored; false on failure (the message
+  /// is marked `failed` and a later call retries). Never throws:
+  /// transcription must not break the tutoring turn it supports.
+  Future<bool> _ensureTranscription(ChatMessage message) {
+    if (AiClient.transcriptOf(message) != null) return Future.value(true);
+    final inFlight = _transcriptionJobs[message.id];
+    if (inFlight != null) return inFlight;
+    late final Future<bool> job;
+    job = _runTranscription(message.id).whenComplete(() {
+      if (identical(_transcriptionJobs[message.id], job)) {
+        _transcriptionJobs.remove(message.id);
+      }
+    });
+    _transcriptionJobs[message.id] = job;
+    return job;
+  }
+
+  Future<bool> _runTranscription(String messageId) async {
+    final index = messages.indexWhere((m) => m.id == messageId);
+    if (index < 0) return false;
+    final videoBase64 = messages[index].payload['videoBase64'] as String?;
+    if (videoBase64 == null || videoBase64.isEmpty) return false;
+    // Mark pending *before* the request, so an app kill mid-flight is
+    // distinguishable on resume and re-driven by
+    // [_scheduleResumeTranscriptions] / [_prepareTranscriptions].
+    _updateMessagePayload(messageId, {
+      'transcriptionStatus': 'pending',
+      'transcriptionError': null,
+    });
+    await _saveMessages();
+    final client = AiClient(settings.apiKey);
+    try {
+      final transcript = await client.transcribeVideo(
+        model: session.model,
+        videoBase64: videoBase64,
+      );
+      if (_disposed) return false;
+      _updateMessagePayload(messageId, {
+        'transcript': transcript,
+        'transcriptionStatus': 'done',
+        'transcriptionError': null,
+        'transcribedAt': DateTime.now().toIso8601String(),
+      });
+      await _saveMessages();
+      notifyListeners();
+      return true;
+    } catch (e) {
+      if (_disposed) return false;
+      final detail = e.toString();
+      _updateMessagePayload(messageId, {
+        'transcriptionStatus': 'failed',
+        'transcriptionError': detail.length > 200
+            ? detail.substring(0, 200)
+            : detail,
+      });
+      await _saveMessages();
+      await db.appendLog('turn-video transcription failed: $detail');
+      return false;
+    } finally {
+      client.close();
+    }
+  }
+
+  /// On resume, (re)transcribes - oldest first, one at a time so a
+  /// long legacy session does not flood the API - every video turn
+  /// that the next request could no longer send as video: all but the
+  /// newest few, which covers both already-aged-out turns and the
+  /// oldest retained video that will age out on the next turn.
+  void _scheduleResumeTranscriptions() {
+    if (_transcriptionSweepRunning || _disposed) return;
+    final videos = AiClient.studentVideoTurns(messages);
+    if (videos.length <= maxVideoTurnsPerRequest - 1) return;
+    final candidates = videos.sublist(
+      0,
+      videos.length - (maxVideoTurnsPerRequest - 1),
+    );
+    _transcriptionSweepRunning = true;
+    unawaited(() async {
+      try {
+        for (final message in candidates) {
+          if (_disposed) return;
+          await _ensureTranscription(message);
+        }
+      } finally {
+        _transcriptionSweepRunning = false;
+      }
+    }());
+  }
+
+  /// Prepares transcripts for the turn about to be sent. Turns that
+  /// this request will already send as transcripts are awaited (in
+  /// steady state their transcribe-ahead job is done or in flight, so
+  /// this rarely waits); the oldest video this request still sends as
+  /// video is kicked off in the background, in parallel with the
+  /// tutor's reply, ready for the next turn. A failed preparation
+  /// never blocks the turn: AiClient degrades that one history item
+  /// to an explicit marker and the failure is retried next turn.
+  Future<void> _prepareTranscriptions() async {
+    final videos = AiClient.studentVideoTurns(messages);
+    if (videos.isEmpty) return;
+    final retainedStart = videos.length > maxVideoTurnsPerRequest
+        ? videos.length - maxVideoTurnsPerRequest
+        : 0;
+    for (final message in videos.sublist(0, retainedStart)) {
+      await _ensureTranscription(message);
+      if (_disposed) return;
+    }
+    if (videos.length >= maxVideoTurnsPerRequest) {
+      unawaited(_ensureTranscription(videos[retainedStart]));
+    }
   }
 
   void _scheduleSave() {
@@ -636,9 +799,11 @@ class SessionController extends ChangeNotifier {
       final studentPayload = <String, dynamic>{
         'hasVideo': true,
         // Kept (base64, like thumbnails) so the history can replay the
-        // turn video locally; only the response id is ever resent to
-        // the API, never these bytes again.
+        // turn video locally. On the wire the newest few are resent as
+        // video when history is replayed; older ones are replaced by
+        // their persisted transcript (see _prepareTranscriptions).
         'videoBase64': videoB64,
+        'transcriptionStatus': 'none',
       };
       messages.add(
         ChatMessage(
@@ -650,10 +815,12 @@ class SessionController extends ChangeNotifier {
           createdAt: DateTime.now(),
         ),
       );
-      await db.saveMessages(session.id, messages);
+      await _saveMessages();
     }
     if (identical(_supersededTurn, turn)) return;
     try {
+      await _prepareTranscriptions();
+      if (_disposed) return;
       await _streamReply(
         videoB64: videoB64,
         interruption: turn.interruption,
@@ -1023,7 +1190,7 @@ class SessionController extends ChangeNotifier {
               createdAt: DateTime.now(),
             ),
           );
-          await db.saveMessages(session.id, messages);
+          await _saveMessages();
           if (parsed.kind == 'ignore') {
             held.clear();
             _queue.clearPending();
