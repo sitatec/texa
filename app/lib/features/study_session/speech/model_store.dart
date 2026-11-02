@@ -5,8 +5,8 @@ import 'model_store_stub.dart'
     if (dart.library.js_interop) 'model_store_web.dart'
     as impl;
 
-
-int getOptimalThreads({int maxThreads = 4}) => impl.getOptimalThreadsImpl(maxThreads);
+int getOptimalThreads({int maxThreads = 4}) =>
+    impl.getOptimalThreadsImpl(maxThreads);
 
 /// Where downloaded speech-model files live.
 ///

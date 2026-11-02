@@ -235,7 +235,19 @@ class _SetupScreenState extends State<SetupScreen> {
         await widget.app.provisioning.vadPath,
         smartTurnPath: await widget.app.provisioning.smartTurnPath,
       );
-      final ttsOk = await widget.app.tryInitSpeech();
+      final ttsOk = await widget.app.tryInitSpeech(
+        onProgress: (label, f) {
+          if (mounted) {
+            setState(() {
+              _progress = f;
+              _progressLabel = tr.setup.downloading(
+                name: label,
+                percent: (f * 100).round().toString(),
+              );
+            });
+          }
+        },
+      );
       if (!vadOk || !ttsOk) {
         throw StateError(
           'Speech models downloaded but did not initialise on this device. Voice Activity Detector: $vadOk | Text To Speech Model: $ttsOk',

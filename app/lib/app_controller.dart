@@ -3,14 +3,14 @@ import 'package:flutter/foundation.dart';
 import 'core/data/db.dart';
 import 'core/data/models.dart';
 import 'features/study_session/speech/model_provisioning.dart';
-import 'features/study_session/speech/sherpa_speech.dart';
+import 'features/study_session/speech/speech_engine.dart';
 
 /// App-wide state: settings, sessions and speech readiness.
 class AppController extends ChangeNotifier {
   AppController(this.db);
   final AppDb db;
   final ModelProvisioningService provisioning = ModelProvisioningService();
-  final SherpaSpeech speech = SherpaSpeech();
+  final SpeechEngine speech = createSpeechEngine();
   AppSettings settings = const AppSettings();
   List<Session> sessions = [];
   bool speechReady = false;
@@ -25,7 +25,9 @@ class AppController extends ChangeNotifier {
 
   /// Initialises on-device speech when the selected voice engine's
   /// models are already provisioned. Returns whether TTS is ready.
-  Future<bool> tryInitSpeech() async {
+  Future<bool> tryInitSpeech({
+    void Function(String label, double fraction)? onProgress,
+  }) async {
     try {
       final engine = settings.ttsEngineOrDefault;
       speechReady = false;
@@ -37,6 +39,7 @@ class AppController extends ChangeNotifier {
           voices: paths.voices,
           tokens: paths.tokens,
           lexicon: paths.lexicon,
+          onProgress: onProgress,
         );
       }
     } catch (e) {
@@ -58,7 +61,7 @@ class AppController extends ChangeNotifier {
       await provisioning.provision(onProgress ?? (_, _) {}, engine: engine);
     }
     await saveSettings(settings.copyWith(ttsEngine: engine));
-    await tryInitSpeech();
+    await tryInitSpeech(onProgress: onProgress);
   }
 
   /// Path to the installed Silero model, when provisioned.
@@ -73,7 +76,9 @@ class AppController extends ChangeNotifier {
   /// Path to the installed Smart Turn model, when provisioned.
   Future<String?> smartTurnPath() async {
     try {
-      return await provisioning.isVadReady ? await provisioning.smartTurnPath : null;
+      return await provisioning.isVadReady
+          ? await provisioning.smartTurnPath
+          : null;
     } catch (_) {
       return null;
     }

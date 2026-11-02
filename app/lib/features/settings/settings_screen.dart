@@ -132,7 +132,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 if (_voiceSwitching) ...[
                   const SizedBox(height: 8),
-                  LinearProgressIndicator(value: _voiceProgress),
+                  LinearProgressIndicator(
+                    value: _voiceProgress == 0 ? null : _voiceProgress,
+                  ),
                   if (_voiceProgressLabel != null) ...[
                     const SizedBox(height: 6),
                     Text(_voiceProgressLabel!),

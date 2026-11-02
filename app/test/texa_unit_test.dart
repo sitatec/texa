@@ -34,6 +34,18 @@ void main() {
     expect(parseReply('<[IGNORE_TURN]>', []).kind, 'ignore');
     expect(parseReply('Hello <[IGNORE_TURN]>', []).kind, 'invalidSentinel');
     expect(parseReply('Hello.', []).kind, 'normal');
+    // TURN_DONE closes a turn after tool results, with or without
+    // tool calls in the same reply, and is never kept as speech.
+    expect(parseReply('<[TURN_DONE]>', []).kind, 'turnDone');
+    expect(
+      parseReply('<[TURN_DONE]>', [
+        (name: 'write_text', args: <String, dynamic>{}),
+      ]).kind,
+      'turnDone',
+    );
+    final mixed = parseReply('That is the vertex. <[TURN_DONE]>', []);
+    expect(mixed.kind, 'normal');
+    expect(mixed.text, 'That is the vertex.');
   });
   test('plotter samples a parabola and breaks nothing', () {
     final r = samplePlot('x^2', -2, 2, null, null);

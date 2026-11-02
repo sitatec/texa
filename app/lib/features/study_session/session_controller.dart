@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:record/record.dart';
-import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
 import '../../core/constants.dart';
 import '../../core/errors.dart';
@@ -19,7 +18,7 @@ import 'board/board_models.dart';
 import 'playback/playback_engine.dart';
 import 'playback/speech_chunker.dart';
 import 'playback/tts_service.dart';
-import 'speech/sherpa_speech.dart';
+import 'speech/speech_engine.dart';
 import 'board_controller.dart';
 import 'turn_video_encoder/pcm_second_buffer.dart';
 import 'turn_video_encoder/turn_video_encoder.dart';
@@ -41,7 +40,7 @@ class SessionController extends ChangeNotifier {
   final AppDb db;
   Session session;
   AppSettings settings;
-  final SherpaSpeech speech;
+  final SpeechEngine speech;
   final String? vadPath;
   final String? smartTurnPath;
   final BoardController board = BoardController();
@@ -51,6 +50,38 @@ class SessionController extends ChangeNotifier {
   bool micMuted = false;
   bool captionsOn = true;
   String? errorMessage;
+
+  /// Auto-dismissal for a transient [errorMessage] (one shown without a
+  /// retry affordance - see [_showError]).
+  Timer? _errorTimer;
+
+  /// Whether the in-flight turn has already received any part of the
+  /// AI's response (text or a tool call). Reset at the start of every
+  /// turn in [_streamReply]; read by [_sendCapturedTurn] when a turn
+  /// fails, because retrying a turn the AI already started answering
+  /// would make it repeat (and re-draw) what it already produced.
+  bool _turnResponseReceived = false;
+
+  /// Whether anything from the in-flight reply has actually surfaced
+  /// to the student (speech started or a board action started). Unlike
+  /// [_turnResponseReceived] (first streamed delta), this only flips in
+  /// the playback consumer, so it stays false while the model is still
+  /// thinking - the phase where an interruption can simply cancel the
+  /// request instead of suspending a partial explanation.
+  bool _turnOutputSurfaced = false;
+
+  /// The turn currently being sent/streamed, kept so a thinking-phase
+  /// interruption can supersede it (see [_supersededTurn]).
+  _CapturedTurn? _activeTurn;
+
+  /// A turn cancelled while the model was still thinking (nothing said
+  /// or drawn yet). It was never answered, so instead of being dropped
+  /// or resumed, its input is concatenated into the next fresh turn:
+  /// the model receives the earlier turn video(s) before the new one
+  /// and answers them together. Cleared when merged, when Stop is
+  /// pressed, or when the interrupting capture turns out to be a
+  /// false alarm (in which case the turn is resent as-is).
+  _CapturedTurn? _supersededTurn;
   List<ChatMessage> messages = [];
   String memoryText = '';
   List<SessionObservation> observations = [];
@@ -72,7 +103,7 @@ class SessionController extends ChangeNotifier {
   _CapturedTurn? _failedTurn;
 
   final AudioRecorder _recorder = AudioRecorder();
-  sherpa.VoiceActivityDetector? _vad;
+  SpeechVad? _vad;
   final List<double> _vadBuffer = [];
   StreamSubscription<Uint8List>? _micSub;
   bool _micRunning = false;
@@ -91,7 +122,6 @@ class SessionController extends ChangeNotifier {
   bool _playbackCancelled = false;
   SuspendedPlayback? _suspended;
   bool _suspendedFromVoice = false;
-  StreamSubscription<AiEvent>? _aiSub;
   AiClient? _activeClient;
   Completer<void>? _playbackIdle;
   String _currentSpeechChunkForSuspend = '';
@@ -106,7 +136,13 @@ class SessionController extends ChangeNotifier {
   /// Whether an AI reply is in flight at all (generating, speaking or
   /// drawing). Drives the Stop button: it must be available from the
   /// moment the turn is sent, not only once speech starts.
-  bool get replyActive => _playing;
+  bool get replyActive => _playing || _activeTurn != null;
+
+  /// A turn is in flight from the moment it is sent - before (and
+  /// regardless of whether) any of its reply has streamed. The status
+  /// already reads "thinking" in this window, so interruption must
+  /// work then too, not only once playback/streaming has begun.
+  bool get _turnInFlight => _playing || _activeTurn != null;
 
   /// What the status pill should show, in priority order: the specific
   /// action being performed, then the coarse turn state. `speaking` is
@@ -238,7 +274,10 @@ class SessionController extends ChangeNotifier {
       }
       if (vadPath != null && _vad == null) {
         try {
-          _vad = speech.createVad(vadPath!);
+          _vad = await speech.createVad(
+            vadPath!,
+            smartTurnPath: smartTurnPath ?? '',
+          );
         } catch (e) {
           debugPrint('Texa VAD init: $e');
           _vad = null;
@@ -276,18 +315,27 @@ class SessionController extends ChangeNotifier {
     await db.saveSettings(settings);
   }
 
+  /// Serialises VAD processing: web VAD runs in a worker, so detection
+  /// is async; chaining keeps windows (and capture decisions) in order.
+  Future<void> _vadChain = Future<void>.value();
+
+  /// Captured turn audio (last 8s) for the Smart Turn judgement.
+  final List<double> _turnSamples = [];
+  int _smartTurnChecks = 0;
+
   void _onPcm(Uint8List data) {
-    // Silero VAD (sherpa-onnx) is the single voice detector on every
-    // platform: PCM16 is converted once to float samples and fed in
-    // window-sized chunks; the same bytes are buffered for the turn video.
+    if (data.length < 2 || _vad == null) return;
+    final copy = Uint8List.fromList(data);
+    _vadChain = _vadChain.then((_) => _processPcm(copy));
+  }
+
+  Future<void> _processPcm(Uint8List data) async {
+    // Silero VAD is the single voice detector on every platform: PCM16
+    // is converted once to float samples and fed in window-sized chunks;
+    // the same bytes are buffered for the turn video.
     final count = data.length ~/ 2;
-    if (count == 0) {
-      return;
-    }
     final vad = _vad;
-    if (vad == null) {
-      return;
-    }
+    if (vad == null || _disposed) return;
     final view = ByteData.sublistView(data);
     var voice = false;
     try {
@@ -295,11 +343,10 @@ class SessionController extends ChangeNotifier {
         _vadBuffer.add(view.getInt16(i * 2, Endian.little) / 32768.0);
       }
       while (_vadBuffer.length >= 512) {
-        vad.acceptWaveform(Float32List.fromList(_vadBuffer.sublist(0, 512)));
+        final window = Float32List.fromList(_vadBuffer.sublist(0, 512));
         _vadBuffer.removeRange(0, 512);
-        if (vad.isDetected()) {
-          voice = true;
-        }
+        if (await vad.process(window)) voice = true;
+        if (_disposed) return;
       }
     } catch (e) {
       debugPrint('Texa VAD: $e');
@@ -307,32 +354,45 @@ class SessionController extends ChangeNotifier {
     }
     final now = DateTime.now();
     if (voice) {
+      _smartTurnChecks = 0;
       _lastVoiceAt = now;
-      if (_playing && !_playbackCancelled) {
+      if (_turnInFlight && !_playbackCancelled) {
         unawaited(interruptPlayback(fromVoice: true));
       }
       if (!_capturing && (state == TurnState.listening || _playing)) {
         _beginCapture(now);
       }
-      if (_capturing) {
-        _bufferPcm(data);
-      }
+      if (_capturing) _appendTurnSamples(data);
     } else if (_capturing) {
-      _bufferPcm(data);
+      _appendTurnSamples(data);
       if (_lastVoiceAt != null &&
           now.difference(_lastVoiceAt!).inMilliseconds >= vadSilenceMs) {
-        unawaited(_finaliseCapture());
+        await _finaliseCapture();
       }
+    }
+    if (_capturing) _bufferPcm(data);
+  }
+
+  void _appendTurnSamples(Uint8List data) {
+    final view = ByteData.sublistView(data);
+    for (var i = 0; i < data.length ~/ 2; i++) {
+      _turnSamples.add(view.getInt16(i * 2, Endian.little) / 32768.0);
+    }
+    const maxSamples = 8 * _sampleRate;
+    if (_turnSamples.length > maxSamples) {
+      _turnSamples.removeRange(0, _turnSamples.length - maxSamples);
     }
   }
 
   void _beginCapture(DateTime now) {
     if (_capturing) return;
     _capturing = true;
+    _turnSamples.clear();
+    _smartTurnChecks = 0;
     // The student is speaking again: any error banner (with its retry
     // affordance) from the previous turn is stale, so drop it now
     // rather than leaving it up until the new turn resolves.
-    if (errorMessage != null) errorMessage = null;
+    _clearError();
     _speechStart = now;
     _drewDuringCapture = false;
     _startTurnEncoder();
@@ -364,9 +424,37 @@ class SessionController extends ChangeNotifier {
     }
     if (speechMs < 120 || _pcm.totalReceived == 0) {
       await _discardTurnEncoder();
+      // False alarm: the "interruption" was just noise, but it already
+      // cancelled a thinking turn. Resend that turn as-is (it was
+      // never answered and nothing replaced it).
+      final superseded = _supersededTurn;
+      if (superseded != null) {
+        _supersededTurn = null;
+        state = TurnState.listening;
+        notifyListeners();
+        await _sendCapturedTurn(superseded, recordStudentMessage: false);
+        return;
+      }
       state = _playing ? TurnState.working : TurnState.listening;
       notifyListeners();
       return;
+    }
+    // Smart Turn: an apparently finished pause may be mid-thought.
+    // Re-check a few times (bounded, ~2s) before ending the turn.
+    // Native SherpaVad always returns true here (silence decides).
+    if (_vad != null && _smartTurnChecks < 4) {
+      bool complete;
+      try {
+        complete = await _vad!.turnComplete(Float32List.fromList(_turnSamples));
+      } catch (_) {
+        complete = true;
+      }
+      if (!complete) {
+        _smartTurnChecks++;
+        _capturing = true;
+        _lastVoiceAt = DateTime.now();
+        return;
+      }
     }
     final suspended = _suspended;
     _suspended = null;
@@ -380,7 +468,7 @@ class SessionController extends ChangeNotifier {
       debugPrint(e.cause?.toString());
       // Encode failure: the turn is not sent (Tech Specs 7.4). The board
       // is untouched and the student simply speaks again.
-      errorMessage = e.message;
+      _showError(e.message, transient: true);
       state = TurnState.listening;
       notifyListeners();
       return;
@@ -462,7 +550,7 @@ class SessionController extends ChangeNotifier {
     try {
       mp4Bytes = await _finishTurnEncoder();
     } on AppError catch (e) {
-      errorMessage = e.message;
+      _showError(e.message, transient: true);
       state = TurnState.listening;
       notifyListeners();
       return;
@@ -474,6 +562,32 @@ class SessionController extends ChangeNotifier {
         uploads: _takePendingUploads(),
       ),
     );
+  }
+
+  /// Shows [message] in the error banner. A persistent error stays
+  /// until the next turn starts; a transient one dismisses itself
+  /// after a few seconds. Callers pair a persistent error with a
+  /// [_failedTurn] snapshot (the banner's Retry button only renders
+  /// while [canRetryTurn]); a transient error must have none, so the
+  /// student is never offered - or able to trigger - a resend.
+  void _showError(String message, {bool transient = false}) {
+    _errorTimer?.cancel();
+    _errorTimer = null;
+    errorMessage = message;
+    if (transient) {
+      _errorTimer = Timer(const Duration(seconds: 8), () {
+        if (_disposed) return;
+        errorMessage = null;
+        notifyListeners();
+      });
+    }
+  }
+
+  /// Drops the current error banner and any pending auto-dismissal.
+  void _clearError() {
+    _errorTimer?.cancel();
+    _errorTimer = null;
+    errorMessage = null;
   }
 
   /// Resends the previous failed turn exactly as it was captured — same
@@ -493,8 +607,28 @@ class SessionController extends ChangeNotifier {
     _CapturedTurn turn, {
     bool recordStudentMessage = true,
   }) async {
+    // A fresh turn after a thinking-phase interruption absorbs the
+    // superseded turn: its videos/uploads ride along before this
+    // turn's own, so the model answers the concatenated input at once.
+    // (A retry is not fresh: it resends its snapshot verbatim.)
+    final superseded = _supersededTurn;
+    if (superseded != null && recordStudentMessage) {
+      _supersededTurn = null;
+      turn = _CapturedTurn(
+        mp4Bytes: turn.mp4Bytes,
+        interruption: turn.interruption,
+        uploads: [...superseded.uploads, ...turn.uploads],
+        priorMp4Bytes: [...superseded.priorMp4Bytes, superseded.mp4Bytes],
+      );
+    }
+    _activeTurn = turn;
     state = TurnState.thinking;
-    errorMessage = null;
+    _clearError();
+    // From here on, any failure of this send is judged against what
+    // this turn (not an earlier one) received - reset before anything
+    // that can throw, not just when streaming starts.
+    _turnResponseReceived = false;
+    _turnOutputSurfaced = false;
     if (recordStudentMessage) _failedTurn = null;
     notifyListeners();
     final videoB64 = base64Encode(turn.mp4Bytes);
@@ -518,26 +652,54 @@ class SessionController extends ChangeNotifier {
       );
       await db.saveMessages(session.id, messages);
     }
+    if (identical(_supersededTurn, turn)) return;
     try {
       await _streamReply(
         videoB64: videoB64,
         interruption: turn.interruption,
         uploads: turn.uploads,
+        priorVideosBase64: turn.priorMp4Bytes.map(base64Encode).toList(),
       );
       _failedTurn = null;
     } on AppError catch (e) {
-      _failedTurn = turn;
-      errorMessage = e.message;
       await db.appendLog('turn failed: ${e.message} ${e.cause ?? ''}');
+      _reportTurnFailure(turn, e.message);
       state = TurnState.listening;
       notifyListeners();
     } catch (e) {
-      _failedTurn = turn;
-      errorMessage =
-          'That turn could not be sent. Your work is safe on the board.';
       await db.appendLog('turn failed: $e');
+      _reportTurnFailure(
+        turn,
+        'That turn could not be sent. Your work is safe on the board.',
+      );
       state = TurnState.listening;
       notifyListeners();
+    } finally {
+      if (identical(_activeTurn, turn)) _activeTurn = null;
+    }
+  }
+
+  /// Decides how a failed turn is surfaced. If the AI never produced
+  /// anything, the captured turn is kept so the banner can offer a
+  /// verbatim retry. If a response had already started - even
+  /// partially: some speech heard, a tool call performed - retrying
+  /// would resend the student's turn from scratch and make the AI
+  /// repeat (and re-draw) what it already did, so no retry snapshot is
+  /// kept and only a temporary, button-less message is shown. The
+  /// partial output itself is untouched: board actions already
+  /// performed stay performed.
+  void _reportTurnFailure(_CapturedTurn turn, String message) {
+    if (_turnResponseReceived) {
+      _failedTurn = null;
+      _showError(
+        'That reply stopped partway, so it cannot be retried without '
+        'the AI repeating itself. What it already said and drew is '
+        'still here - just carry on when you are ready.',
+        transient: true,
+      );
+    } else {
+      _failedTurn = turn;
+      _showError(message);
     }
   }
 
@@ -670,18 +832,51 @@ class SessionController extends ChangeNotifier {
     _pcm.clear();
   }
 
+  /// True while everything streamed so far could still turn out to be
+  /// (only) a control sentinel - <[IGNORE_TURN]> or <[TURN_DONE]> - so
+  /// none of it may reach the speech splitter yet. Covers the whole
+  /// sentinel, a prefix of it (split across deltas), and real text
+  /// ending in a partial sentinel fragment, which must be held back
+  /// until the next delta shows whether it completes the sentinel.
+  bool _isSentinelOnlySoFar(String raw) {
+    final trimmed = raw.trim();
+    for (final sentinel in [ignoreTurnSentinel, turnDoneSentinel]) {
+      if (raw.contains(sentinel)) return true;
+      if (sentinel.startsWith(trimmed)) return true;
+    }
+    // Ends with a partial sentinel start (e.g. "Done. <[TURN"): hold.
+    for (final sentinel in [ignoreTurnSentinel, turnDoneSentinel]) {
+      for (var i = 1; i < sentinel.length; i++) {
+        if (raw.endsWith(sentinel.substring(0, i))) return true;
+      }
+    }
+    return false;
+  }
+
   Future<void> _streamReply({
     required String videoB64,
     SuspendedPlayback? interruption,
     List<AiUpload> uploads = const [],
     String? extraContext,
+    List<String> priorVideosBase64 = const [],
   }) async {
+    // A fresh AiClient per turn is deliberate: it snapshots the current
+    // API key and, via _activeClient, gives interrupt/dispose a handle
+    // whose close() aborts exactly this turn's in-flight request. It is
+    // not a fresh transport per request - AiClient reuses its underlying
+    // HTTP client for every tool round of the turn (see its
+    // _NonClosingClient), which the function_call_output follow-ups need.
     final client = AiClient(settings.apiKey);
     _activeClient = client;
     _queue = PlaybackQueue();
     _producerDone = false;
     _playbackCancelled = false;
     _playing = true;
+    // Nothing of this turn's reply has arrived yet; the first text or
+    // tool call flips this, and _sendCapturedTurn uses it to decide
+    // whether a failure may offer a retry (see _reportTurnFailure).
+    _turnResponseReceived = false;
+    _turnOutputSurfaced = false;
     // Thinking, not speaking: no speech (and possibly no reply at all)
     // exists yet. The consumer promotes this to speaking / the specific
     // action as it actually performs each queued item.
@@ -731,6 +926,7 @@ class SessionController extends ChangeNotifier {
     }
 
     final splitter = StreamingSpeechSplitter();
+    var sentinelHeldBack = false;
     final held = <String>[];
     var textReleased = false;
     var rawText = '';
@@ -747,14 +943,19 @@ class SessionController extends ChangeNotifier {
         currentObservation: sessionObservation,
         uploads: uploads,
         extraContext: extraContext,
+        priorVideosBase64: priorVideosBase64,
         reasoningEffort: session.reasoningEffort,
         executeToolCall: executeToolCall,
       )) {
         if (generation != _playbackGeneration) break;
         if (event is AiTextDelta) {
+          _turnResponseReceived = true;
           rawText += event.text;
-          if (rawText.contains(ignoreTurnSentinel) ||
-              ignoreTurnSentinel.startsWith(rawText.trim())) {
+          if (_isSentinelOnlySoFar(rawText)) {
+            if (rawText.contains(ignoreTurnSentinel) ||
+                rawText.contains(turnDoneSentinel)) {
+              sentinelHeldBack = true;
+            }
             continue;
           }
           for (final sentence in splitter.add(event.text)) {
@@ -772,6 +973,7 @@ class SessionController extends ChangeNotifier {
             }
           }
         } else if (event is AiToolCallComplete) {
+          _turnResponseReceived = true;
           sawTool = true;
           toolCallsRaw.add({
             if (event.callId.isNotEmpty) 'id': event.callId,
@@ -802,14 +1004,22 @@ class SessionController extends ChangeNotifier {
                 )
                 .toList(),
           );
-          // Save the AI reply as received, before playback drains.
+          // Save the AI reply before playback drains. When a sentinel
+          // was involved, persist the cleaned text instead of the raw
+          // one: the sentinel is a control signal, never content, and
+          // must stay out of history/replay. responseId is kept, so
+          // request chaining (previous_response_id) still works.
+          final cleanedRaw =
+              parsed.kind == 'turnDone' || parsed.text != rawText.trim()
+              ? <String, dynamic>{...event.raw, 'text': parsed.text}
+              : event.raw;
           messages.add(
             ChatMessage(
               id: newId(),
               sessionId: session.id,
               role: 'ai',
               kind: sawTool ? 'actions' : 'text',
-              payloadJson: jsonEncode(event.raw),
+              payloadJson: jsonEncode(cleanedRaw),
               createdAt: DateTime.now(),
             ),
           );
@@ -836,13 +1046,35 @@ class SessionController extends ChangeNotifier {
             notifyListeners();
             return;
           }
-          for (final s in splitter.flush()) {
-            held.add(s);
+          if (parsed.kind == 'turnDone') {
+            // The model closed the turn after tool results: nothing
+            // more to say. Drop any held (unspoken) fragments - tool
+            // actions already performed stay performed - and let the
+            // normal post-loop path drain the queue and return to
+            // listening. No suspended-explanation resume: unlike
+            // IGNORE_TURN this is not an interruption verdict.
+            held.clear();
+            _producerDone = true;
+            await consumer;
+            if (generation != _playbackGeneration) return;
+            state = micMuted ? TurnState.muted : TurnState.listening;
+            notifyListeners();
+            return;
           }
-          for (final h in held) {
-            _queue.add(TextItem(h));
+          if (sentinelHeldBack && !textReleased && parsed.text.isNotEmpty) {
+            // Speech arrived glued to a stray sentinel and was held
+            // back whole; queue the cleaned text directly.
+            held.clear();
+            _queue.add(TextItem(parsed.text));
+          } else {
+            for (final s in splitter.flush()) {
+              held.add(s);
+            }
+            for (final h in held) {
+              _queue.add(TextItem(h));
+            }
+            held.clear();
           }
-          held.clear();
         }
       }
     } finally {
@@ -850,6 +1082,7 @@ class SessionController extends ChangeNotifier {
       client.close();
       if (identical(_activeClient, client)) _activeClient = null;
     }
+    if (generation != _playbackGeneration) return;
     await consumer;
     if (!_playbackCancelled) {
       state = micMuted ? TurnState.muted : TurnState.listening;
@@ -878,6 +1111,7 @@ class SessionController extends ChangeNotifier {
         }
         if (generation != _playbackGeneration) break;
         if (item is TextItem) {
+          _turnOutputSurfaced = true;
           state = TurnState.speaking;
           notifyListeners();
           _currentSpeechChunkForSuspend =
@@ -886,6 +1120,7 @@ class SessionController extends ChangeNotifier {
           await speaker.drained;
           _queue.completed.add({'tool': 'text', 'rect': ''});
         } else if (item is ActionItem) {
+          _turnOutputSurfaced = true;
           activeActionTool = item.tool;
           notifyListeners();
           AiToolResult result;
@@ -1041,20 +1276,36 @@ class SessionController extends ChangeNotifier {
   // ---------- Interruption ----------
   /// Halts playback promptly; completed board content stays exactly as drawn.
   Future<void> interruptPlayback({required bool fromVoice}) async {
-    if (!_playing) return;
+    if (!_turnInFlight) return;
     _failPendingToolCalls('Playback was interrupted before this action ran.');
-    _suspended = _queue.suspend(
-      speaker.currentChunk.value ?? _currentSpeechChunkForSuspend,
-    );
+    // Abort the request FIRST, before anything that can take time
+    // (stopping audio): this completes AiClient's close signal, which
+    // both ends the locally-awaited stream at once and fires the
+    // transport's abort trigger for the in-flight HTTP request - even
+    // while it is still reaching the server or awaiting its first
+    // token, the phases where the status already reads "thinking".
+    _activeClient?.close();
+    // Thinking-phase interruption: the model has produced nothing the
+    // student has seen or heard yet, so there is no partial explanation
+    // to suspend/resume. Cancel the request outright (client close
+    // below, made prompt by AiClient._untilClosed) and supersede the
+    // turn: its input is concatenated into the next fresh turn instead
+    // of being answered on its own. Any interruption context the model
+    // already received with it is moot - nothing was ever said.
+    final thinkingPhase = !_turnOutputSurfaced && _activeTurn != null;
+    if (thinkingPhase) {
+      _supersededTurn = _activeTurn;
+      _suspended = null;
+    } else {
+      _suspended = _queue.suspend(
+        speaker.currentChunk.value ?? _currentSpeechChunkForSuspend,
+      );
+    }
     _suspendedFromVoice = fromVoice;
     _playbackGeneration++;
     _playbackCancelled = true;
     _producerDone = true;
     await speaker.stop();
-    try {
-      await _aiSub?.cancel();
-    } catch (_) {}
-    _activeClient?.close();
     activeActionTool = null;
     state = TurnState.listening;
     notifyListeners();
@@ -1064,8 +1315,15 @@ class SessionController extends ChangeNotifier {
 
   /// Stops the AI completely, discarding any suspended explanation.
   Future<void> stopPlayback() async {
+    // Stop means discard entirely - including a turn superseded while
+    // thinking, which a voice/draw barge-in would otherwise merge into
+    // the next turn.
+    _supersededTurn = null;
     _suspended = null;
     await interruptPlayback(fromVoice: false);
+    // interruptPlayback may have superseded a thinking turn; Stop
+    // discards it rather than merging it into a later turn.
+    _supersededTurn = null;
     _suspended = null;
     state = micMuted ? TurnState.muted : TurnState.listening;
     notifyListeners();
@@ -1088,7 +1346,7 @@ class SessionController extends ChangeNotifier {
   void onStudentDrawStart() {
     _drewDuringCapture = true;
     board.cameraTakenByStudent = true;
-    if (_playing) unawaited(interruptPlayback(fromVoice: false));
+    if (_turnInFlight) unawaited(interruptPlayback(fromVoice: false));
   }
 
   void onManualCamera() {
@@ -1099,11 +1357,13 @@ class SessionController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _saveTimer?.cancel();
+    _errorTimer?.cancel();
     unawaited(flushSave());
     _frameTimer?.cancel();
     _silenceTimer?.cancel();
     unawaited(_stopMic());
     unawaited(_turnEncoder?.abort() ?? Future<void>.value());
+    unawaited(_vad?.dispose() ?? Future<void>.value());
     unawaited(speaker.stop());
     speaker.dispose();
     _activeClient?.close();
@@ -1123,9 +1383,15 @@ class _CapturedTurn {
     required this.mp4Bytes,
     this.interruption,
     this.uploads = const [],
+    this.priorMp4Bytes = const [],
   });
 
   final Uint8List mp4Bytes;
   final SuspendedPlayback? interruption;
   final List<AiUpload> uploads;
+
+  /// Videos of earlier turns that were cancelled while the model was
+  /// still thinking and never answered; sent before [mp4Bytes] so the
+  /// model answers the concatenated input in one turn.
+  final List<Uint8List> priorMp4Bytes;
 }

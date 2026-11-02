@@ -317,6 +317,18 @@ class BoardController extends ChangeNotifier {
     return null;
   }
 
+  /// The one text style board text is both measured and rendered with.
+  /// Keeping these in sync matters: measuring with a different font than
+  /// the renderer uses under-estimates the natural width, so the widget
+  /// gets a box a few pixels too narrow and wraps the last character of
+  /// an otherwise single-line word ("Functions" -> "Function\ns").
+  static TextStyle boardTextStyle(double fontSize, {Color? color}) => TextStyle(
+    color: color,
+    fontSize: fontSize,
+    fontFamily: 'GoogleSansFlex',
+    height: 1.15,
+  );
+
   /// Measures plain board text the way the board renders it, wrapped at
   /// [maxWidth]. Used so a text element's rect is its *actual* rendered
   /// size instead of a fixed guessed box: short text stays on one line
@@ -326,10 +338,7 @@ class BoardController extends ChangeNotifier {
   /// must describe what is really on the board.
   static Size measureBoardText(String text, double fontSize, double maxWidth) {
     final painter = TextPainter(
-      text: TextSpan(
-        text: text,
-        style: TextStyle(fontSize: fontSize, height: 1.15),
-      ),
+      text: TextSpan(text: text, style: boardTextStyle(fontSize)),
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: maxWidth);
     return painter.size;
@@ -348,8 +357,15 @@ class BoardController extends ChangeNotifier {
   }) {
     final toEdge = (boardWidth - x).clamp(80.0, boardWidth);
     final natural = measureBoardText(text, fontSize, double.infinity).width;
+    // Breathing room: a box exactly as wide as the measured text can
+    // still wrap its last glyph when the widget re-lays it out (font
+    // fallback, sub-pixel rounding), so single-line text gets a small
+    // slack - a fraction of the font size, at least a few pixels. An
+    // explicit width from the model is an intentional wrap width and
+    // is used as-is.
+    final breathingRoom = math.max(4.0, fontSize * 0.2);
     final width = requestedWidth == null
-        ? natural.clamp(1.0, toEdge)
+        ? (natural + breathingRoom).clamp(1.0, toEdge)
         : requestedWidth.clamp(1.0, toEdge);
     final height = measureBoardText(text, fontSize, width).height;
     return Rect.fromLTWH(x, y, width, math.max(height, fontSize * 1.15));
@@ -566,10 +582,19 @@ class BoardController extends ChangeNotifier {
   /// Smoothly frames [rect] in the viewport unless the student took the camera.
   Future<void> frameRect(Rect rect) async {
     if (cameraTakenByStudent) return;
-    final padded = rect.inflate(rect.width * 0.1 + 24);
-    final scale = (viewportSize.width / padded.width)
-        .clamp(0.12, 2.5)
-        .toDouble();
+    // Generous padding plus a breathing-room factor on the fitted
+    // scale: framing used to fit only the viewport width with ~10%
+    // padding (and could zoom to 2.5x), which felt far too tight -
+    // the element filled the screen edge to edge. Fit both viewport
+    // dimensions instead, leave ~18% + 40 units around the rect, and
+    // then back the zoom off a further 15%.
+    final pad = math.max(rect.width, rect.height) * 0.18 + 40;
+    final padded = rect.inflate(pad);
+    final fitScale = math.min(
+      viewportSize.width / padded.width,
+      viewportSize.height / padded.height,
+    );
+    final scale = (fitScale * 0.85).clamp(0.1, 2.0).toDouble();
     final target = Matrix4.identity()
       ..translateByDouble(viewportSize.width / 2, viewportSize.height / 2, 0, 1)
       ..scaleByDouble(scale, scale, 1, 1)

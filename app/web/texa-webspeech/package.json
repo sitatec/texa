@@ -1,0 +1,25 @@
+{
+  "name": "texa-webspeech",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Web speech workers for Texa: Silero VAD + Smart Turn (realtime worker) and Kokoro/Piper TTS (TTS worker). Built output is written to app/web/.",
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "node build.mjs --check"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.3.2",
+    "@mintplex-labs/piper-tts-web": "1.0.5",
+    "kokoro-js": "1.2.1",
+    "onnxruntime-web": "1.31.1"
+  },
+  "overrides": {
+    "kokoro-js": {
+      "@huggingface/transformers": "$@huggingface/transformers"
+    }
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

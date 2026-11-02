@@ -173,6 +173,18 @@ class AiClient {
   final http.Client _client;
   final OpenAIClient _openAi;
 
+  /// Set by [close]. A closed client must never start another round of
+  /// the agentic loop: after an interrupt the tool outputs of the round
+  /// that was in flight are stale and must not be sent to the model.
+  bool _closed = false;
+
+  /// Completed by [close] so a stream blocked waiting for the model's
+  /// first token (e.g. while it is still thinking) ends immediately,
+  /// instead of whenever the transport gets around to noticing the
+  /// close - on web a closed client may not abort an in-flight fetch
+  /// at all, which used to make thinking turns un-interruptible.
+  final Completer<void> _closeSignal = Completer<void>();
+
   /// `dart_openai` joins `baseUrl/version/endpoint`, while [apiBaseUrl]
   /// already contains the version segment (`https://api.meta.ai/v1`).
   static ({String baseUrl, String version}) get _baseUrl {
@@ -187,7 +199,71 @@ class AiClient {
     return (baseUrl: origin, version: segments.last);
   }
 
-  void close() => _client.close();
+  /// Closes the underlying transport, aborting any request in flight.
+  ///
+  /// This is the session controller's abort handle for the current turn.
+  /// A turn interrupted this way ends silently (no error is surfaced for
+  /// a cancellation the app itself requested); see the `_closed` guards
+  /// in [streamTurn] and [_streamOneResponse].
+  void close() {
+    _closed = true;
+    if (!_closeSignal.isCompleted) _closeSignal.complete();
+    _client.close();
+  }
+
+  /// Races [source] against [close]: when the client is closed the
+  /// returned stream ends promptly (cancelling the source) even if the
+  /// source is blocked waiting for its first event - e.g. while the
+  /// model is still thinking, where closing the transport alone may
+  /// not unblock the await (notably on web). Ending without an error
+  /// is deliberate: callers treat a closed client as a silent abort.
+  Stream<T> _untilClosed<T>(Stream<T> source) {
+    late StreamController<T> controller;
+    StreamSubscription<T>? subscription;
+    var finished = false;
+    controller = StreamController<T>(
+      onListen: () {
+        subscription = source.listen(
+          (event) {
+            if (!finished && !controller.isClosed) controller.add(event);
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (!finished && !controller.isClosed) {
+              controller.addError(error, stackTrace);
+            }
+          },
+          onDone: () {
+            if (finished) return;
+            finished = true;
+            if (!controller.isClosed) controller.close();
+          },
+        );
+        _closeSignal.future.then((_) {
+          if (finished) return;
+          finished = true;
+          final sub = subscription;
+          subscription = null;
+          if (sub != null) unawaited(sub.cancel().catchError((_) {}));
+          if (!controller.isClosed) controller.close();
+        });
+      },
+      onCancel: () {
+        finished = true;
+        final sub = subscription;
+        subscription = null;
+        // Fire-and-forget, deliberately NOT awaited: cancelling a
+        // source suspended in `await client.send()` (still awaiting
+        // response headers / first token) only completes when that
+        // await does, and returning that future from onCancel holds
+        // this controller's done event hostage until then - which is
+        // exactly the abort we are trying to perform. (Found by
+        // reproduction: with the await, close() during the
+        // awaiting-headers phase never ended the stream.)
+        if (sub != null) unawaited(sub.cancel().catchError((_) {}));
+      },
+    );
+    return controller.stream;
+  }
 
   /// The id of the most recent stored response in [history], or null when
   /// no AI message carries one (a brand-new or pre-`store` session). The
@@ -206,7 +282,12 @@ class AiClient {
   Future<void> testConnection() async {
     try {
       await _openAi.model
-          .list(client: _client)
+          .list(
+            client: _NonClosingClient(
+              _client,
+              abortTrigger: _closeSignal.future,
+            ),
+          )
           .timeout(const Duration(seconds: connectTimeoutSeconds));
     } on RequestFailedException catch (e) {
       if (e.statusCode == 401 || e.statusCode == 403) {
@@ -243,6 +324,7 @@ class AiClient {
     String currentObservation = '',
     List<AiUpload> uploads = const [],
     String? extraContext,
+    List<String> priorVideosBase64 = const [],
   }) {
     final instructions = StringBuffer(kSystemPrompt);
     if (studentMemory.trim().isNotEmpty) {
@@ -341,6 +423,12 @@ class AiClient {
     }
 
     final parts = <Map<String, dynamic>>[
+      // Inputs of earlier turns that were cancelled before the model
+      // produced anything (interrupted while thinking): they were
+      // never answered, so they ride along *before* this turn's own
+      // content and the model answers them together with it.
+      for (final prior in priorVideosBase64)
+        {'type': 'input_video', 'video_url': 'data:video/mp4;base64,$prior'},
       if (context.isNotEmpty)
         {'type': 'input_text', 'text': context.toString()},
     ];
@@ -401,6 +489,7 @@ class AiClient {
     String? previousResponseId,
     AiToolExecutor? executeToolCall,
     int maxToolRounds = 10,
+    List<String> priorVideosBase64 = const [],
   }) async* {
     var previousId = previousResponseId ?? latestResponseId(history);
     final request = _requestInput(
@@ -413,6 +502,7 @@ class AiClient {
       uploads: uploads,
       extraContext: extraContext,
       includeHistory: previousId == null,
+      priorVideosBase64: priorVideosBase64,
     );
 
     final fullText = StringBuffer();
@@ -422,6 +512,9 @@ class AiClient {
     var wrapUpNext = false;
 
     for (var round = 0; ; round++) {
+      // Closed while the previous round (or its tool calls) was in
+      // flight: the turn was interrupted, so do not send anything else.
+      if (_closed) return;
       final allowTools = !wrapUpNext;
       _ResponseRound? completed;
       await for (final event in _streamOneResponse(
@@ -438,7 +531,10 @@ class AiClient {
           yield event;
         }
       }
-      final result = completed!;
+      // Null (or closed) means the round was aborted by [close]; end
+      // the turn without emitting a done event or a bogus error.
+      final result = completed;
+      if (result == null || _closed) return;
       if (result.responseId != null && result.responseId!.isNotEmpty) {
         previousId = result.responseId;
         responseIds.add(result.responseId!);
@@ -461,6 +557,23 @@ class AiClient {
       // the chained follow-up request is skipped.
       if (executeToolCall == null) break;
 
+      // Every call must be answered under the exact call_id the API
+      // issued for it. A missing id can never be repaired locally -
+      // a synthesised one (call_<name>) is rejected with a 400
+      // ("function_call_output call_id ... does not match any
+      // function_call in the request or its previous_response_id
+      // chain") - so fail the turn before performing any of the
+      // round's calls instead of sending a doomed follow-up.
+      for (final call in result.calls) {
+        if (call.callId.isEmpty) {
+          throw AppError(
+            'Meta AI asked for an action (${call.name}) without a call '
+            'id, so its result could not be sent back. Your work is '
+            'safe on the board.',
+          );
+        }
+      }
+
       // Perform every call in the order the model issued it and answer
       // each one before the next request goes out. Outcomes are plain
       // text only - no board screenshots or other multimodal payloads.
@@ -471,8 +584,10 @@ class AiClient {
           outcome = await executeToolCall(call.name, call.args);
         } catch (e) {
           debugPrint('Failed to execute tool call $call: $e');
+          final detail = e.toString();
           outcome = AiToolResult.failure(
-            'The action failed: ${e.toString().substring(0, 200)}',
+            'The action failed: '
+            '${detail.length > 200 ? detail.substring(0, 200) : detail}',
           );
         }
         final entry = roundCalls.firstWhere(
@@ -484,7 +599,7 @@ class AiClient {
         entry['output'] = outcome.wireOutput;
         outputs.add({
           'type': 'function_call_output',
-          'call_id': call.callId.isNotEmpty ? call.callId : 'call_${call.name}',
+          'call_id': call.callId,
           'output': outcome.wireOutput,
         });
       }
@@ -524,6 +639,7 @@ class AiClient {
     final completedCalls =
         <({String callId, String name, Map<String, dynamic> args})>[];
     final emittedTools = <String>{};
+    final completedIndexByKey = <String, int>{};
     String? responseId;
     var sawEvent = false;
 
@@ -533,16 +649,40 @@ class AiClient {
         callOrder.add(key);
       }
       if (name != null && name.isNotEmpty) callNames[key] = name;
-      if (callId != null && callId.isNotEmpty) callIds[key] = callId;
+      if (callId != null && callId.isNotEmpty) {
+        callIds[key] = callId;
+        // A call completed before its id arrived (the arguments events
+        // carry no call_id; it only appears on the output item) gets
+        // the real id patched in - never a synthesised substitute.
+        final index = completedIndexByKey[key];
+        if (index != null && completedCalls[index].callId.isEmpty) {
+          final done = completedCalls[index];
+          completedCalls[index] = (
+            callId: callId,
+            name: done.name,
+            args: done.args,
+          );
+        }
+      }
     }
 
-    AiToolCallComplete? finishCall(String key) {
+    AiToolCallComplete? finishCall(
+      String key, {
+      bool allowMissingCallId = false,
+    }) {
       if (emittedTools.contains(key)) return null;
       final name = callNames[key] ?? '';
       if (name.isEmpty) return null;
+      final callId = callIds[key] ?? '';
+      // function_call_arguments.done fires *before* the output item
+      // that carries the call_id, so finishing there would lock the
+      // call in with an empty id. Wait for the id; the output-item and
+      // response-completed events that follow supply it, and the
+      // end-of-stream flush (allowMissingCallId) is the last resort.
+      if (callId.isEmpty && !allowMissingCallId) return null;
       emittedTools.add(key);
       final args = decodeArgs(argBuffers[key]?.toString() ?? '');
-      final callId = callIds[key] ?? '';
+      completedIndexByKey[key] = completedCalls.length;
       completedCalls.add((callId: callId, name: name, args: args));
       return AiToolCallComplete(name, args, callId: callId);
     }
@@ -556,22 +696,34 @@ class AiClient {
     }
 
     try {
-      await for (final event
-          in _openAi.responses
-              .createStream(
-                model: model,
-                instructions: instructions,
-                input: input,
-                store: true,
-                previousResponseId: previousResponseId,
-                tools: toolSchemas(),
-                toolChoice: allowTools ? 'auto' : 'none',
-                reasoning: reasoningEffort == null
-                    ? null
-                    : {'effort': reasoningEffort},
-                client: _client,
-              )
-              .timeout(const Duration(seconds: responseTimeoutSeconds))) {
+      await for (final event in _untilClosed(
+        _openAi.responses
+            .createStream(
+              model: model,
+              instructions: instructions,
+              input: input,
+              store: true,
+              previousResponseId: previousResponseId,
+              tools: toolSchemas(),
+              toolChoice: allowTools ? 'auto' : 'none',
+              reasoning: reasoningEffort == null
+                  ? null
+                  : {'effort': reasoningEffort},
+              // Never hand dart_openai the owned client directly: its
+              // streaming pipeline unconditionally closes whatever
+              // client it is given when the stream ends, so the first
+              // round used to kill the transport and every follow-up
+              // request (starting with the function_call_output round)
+              // failed with "Client is already closed". The wrapper
+              // absorbs that close; [_client] stays alive for every
+              // round of the loop and is only closed by [close].
+              client: _NonClosingClient(
+                _client,
+                abortTrigger: _closeSignal.future,
+              ),
+            )
+            .timeout(const Duration(seconds: responseTimeoutSeconds)),
+      )) {
         sawEvent = true;
         switch (event['type']) {
           case 'response.created' || 'response.in_progress':
@@ -604,6 +756,20 @@ class AiClient {
             }
             final done = finishCall(key);
             if (done != null) yield done;
+          case 'response.output_item.added':
+            // The earliest event carrying the call_id (and name) for a
+            // function call - well before its arguments finish. Only
+            // register it here; the call completes on arguments.done /
+            // output_item.done once its arguments are whole.
+            final item = event['item'];
+            if (item is Map && item['type'] == 'function_call') {
+              final key = (item['id'] ?? item['call_id'] ?? '').toString();
+              registerCall(
+                key,
+                item['name'] as String?,
+                item['call_id'] as String?,
+              );
+            }
           case 'response.output_item.done':
             final item = event['item'];
             if (item is Map && item['type'] == 'function_call') {
@@ -661,6 +827,7 @@ class AiClient {
         }
       }
     } on RequestFailedException catch (e) {
+      if (_closed) return;
       debugPrint(e.message);
       if (e.statusCode == 429) {
         throw const AppError(
@@ -672,26 +839,35 @@ class AiClient {
         cause: e,
       );
     } on TimeoutException catch (e) {
+      if (_closed) return;
       throw AppError(
         'Meta AI took too long to reply. Please retry your turn.',
         cause: e,
       );
     } on AppError {
+      if (_closed) return;
       rethrow;
     } catch (e) {
+      if (_closed) return;
       debugPrint("Meta AI API call failed: $e");
       throw AppError(
         'Could not reach Meta AI. Check your connection and retry your turn.',
         cause: e,
       );
     }
+    // The transport was closed mid-stream and the stream simply ended:
+    // that is an abort, not a reply, so emit no round at all.
+    if (_closed) return;
     if (!sawEvent) {
       throw const AppError(
         'Meta AI returned an empty reply. Please retry your turn.',
       );
     }
     for (final key in callOrder) {
-      final done = finishCall(key);
+      // Last resort for a stream that ended without an output item:
+      // surface the call even without an id. streamTurn refuses to
+      // answer such a call (see there) rather than inventing an id.
+      final done = finishCall(key, allowMissingCallId: true);
       if (done != null) yield done;
     }
     yield _ResponseRound(
@@ -700,4 +876,65 @@ class AiClient {
       calls: completedCalls,
     );
   }
+}
+
+/// Delegates to [AiClient]'s owned client but ignores [close].
+///
+/// `dart_openai` closes the client passed to a streaming request in a
+/// `finally` block, whether it created that client or the caller did.
+/// Handing it this wrapper per request keeps ownership (and the actual
+/// close) with [AiClient], so one client can serve every round of a
+/// turn - including the `function_call_output` follow-ups.
+/// Wraps the AiClient's owned transport for handing to dart_openai.
+///
+/// Two jobs:
+///
+///  * Absorb dart_openai's close: its streaming pipeline
+///    unconditionally closes whatever client it is given when the
+///    stream ends, which used to kill the transport after the first
+///    round so every `function_call_output` follow-up failed with
+///    "Client is already closed". [close] is a no-op here; the owned
+///    client is only closed by `AiClient.close`.
+///
+///  * Give the request a real abort trigger. dart_openai has no
+///    cancellation API (no `AbortSignal`-equivalent parameter; it
+///    builds a plain `http.Request` internally), so the only lever is
+///    the transport: package:http clients (BrowserClient/IOClient)
+///    honour `AbortableRequest.abortTrigger` at every phase - before
+///    the request is sent, while awaiting response headers, and while
+///    streaming - exactly like the JS SDK's AbortSignal. Rewriting the
+///    request here, with the trigger wired to the owner's close
+///    signal, makes `AiClient.close()` abort the in-flight request at
+///    the socket/fetch level instead of merely abandoning it locally.
+class _NonClosingClient extends http.BaseClient {
+  _NonClosingClient(this._inner, {this._abortTrigger});
+
+  final http.Client _inner;
+  final Future<void>? _abortTrigger;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final trigger = _abortTrigger;
+    if (trigger == null ||
+        request is http.MultipartRequest ||
+        request is http.Abortable) {
+      return _inner.send(request);
+    }
+    final bodyBytes = await request.finalize().toBytes();
+    final abortable =
+        http.AbortableRequest(
+            request.method,
+            request.url,
+            abortTrigger: trigger,
+          )
+          ..headers.addAll(request.headers)
+          ..bodyBytes = bodyBytes
+          ..followRedirects = request.followRedirects
+          ..maxRedirects = request.maxRedirects
+          ..persistentConnection = request.persistentConnection;
+    return _inner.send(abortable);
+  }
+
+  @override
+  void close() {}
 }

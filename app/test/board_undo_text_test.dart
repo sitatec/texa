@@ -64,6 +64,24 @@ void main() {
   });
 
   group('free text sizing', () {
+    test('single-line text gets breathing room over its natural width', () {
+      final c = BoardController();
+      final rect = c.textRectFor(x: 60, y: 60, text: 'Functions', fontSize: 30);
+      final natural = BoardController.measureBoardText(
+        'Functions',
+        30,
+        double.infinity,
+      ).width;
+      // Wider than the exact measured width, so the renderer cannot
+      // wrap the final glyph ("Function\ns"), yet still one line tall.
+      expect(rect.width, greaterThan(natural));
+      expect(rect.height, lessThan(30 * 1.15 * 2));
+    });
+
+    test('measurement uses the same font as the board renderer', () {
+      expect(BoardController.boardTextStyle(30).fontFamily, 'GoogleSansFlex');
+    });
+
     test('short text is one measured line, not the old fixed box', () async {
       final c = BoardController();
       final rect = await c.applyAction(
@@ -144,4 +162,20 @@ void main() {
       expect(c.elements.single.text, 'A considerably longer label than before');
     });
   });
+
+  group('frameRect framing', () {
+    test('leaves breathing room instead of filling the viewport', () async {
+      final c = BoardController();
+      c.viewportSize = const Size(800, 600);
+      await c.frameRect(const Rect.fromLTWH(100, 100, 200, 100));
+      // pad = 200*0.18+40 = 76 -> padded 352x252; fit = min(800/352,
+      // 600/252) = 2.27; backed off 15% -> ~1.93 (old code zoomed to
+      // 800/244 = 3.28, clamped at 2.5, using width only).
+      final scale = c.transform.value.getMaxScaleOnAxis();
+      expect(scale, closeTo(1.93, 0.05));
+      expect(scale, lessThan(2.0));
+    });
+  });
 }
+
+void frameRectMain() {}

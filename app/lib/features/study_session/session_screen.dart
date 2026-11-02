@@ -34,6 +34,7 @@ class _SessionScreenState extends State<SessionScreen> {
   bool _fullscreen = false;
   final _fullScreenManager = FullScreenManager();
   bool _moreOpen = false;
+  bool _toolbarMoreOpen = false;
 
   /// The macOS headphones notice is shown once per app run, not on
   /// every session the student opens.
@@ -320,8 +321,25 @@ class _SessionScreenState extends State<SessionScreen> {
                     ),
                   ),
                 ),
-                Positioned(left: 10, top: 64, child: _toolbar()),
-                Positioned(right: 10, top: 64, child: _overlays(compact)),
+                if (compact) ...[
+                  Align(
+                    alignment: .centerStart,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: IntrinsicHeight(child: _toolbar(compact)),
+                    ),
+                  ),
+                  Align(
+                    alignment: .centerEnd,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: IntrinsicHeight(child: _overlays(compact)),
+                    ),
+                  ),
+                ] else ...[
+                  Positioned(left: 10, top: 64, child: _toolbar(compact)),
+                  Positioned(right: 10, top: 64, child: _overlays(compact)),
+                ],
                 if (c.replyActive)
                   Positioned(
                     right: 8,
@@ -359,10 +377,15 @@ class _SessionScreenState extends State<SessionScreen> {
                             const Icon(Symbols.error_outline, color: texaRed),
                             const SizedBox(width: 8),
                             Expanded(child: Text(c.errorMessage!)),
-                            TextButton(
-                              onPressed: () => unawaited(c.retryTurn()),
-                              child: Text(tr.session.retryTurn),
-                            ),
+                            // Retry only exists while a failed turn is
+                            // actually kept for resending; failures after
+                            // a partial response (and pre-send failures)
+                            // keep no snapshot, so they show no button.
+                            if (c.canRetryTurn)
+                              TextButton(
+                                onPressed: () => unawaited(c.retryTurn()),
+                                child: Text(tr.session.retryTurn),
+                              ),
                           ],
                         ),
                       ),
@@ -465,128 +488,191 @@ class _SessionScreenState extends State<SessionScreen> {
     ),
   );
 
-  Widget _toolbar() => ListenableBuilder(
-    listenable: c.board,
-    builder: (context, _) => Material(
-      elevation: 2,
-      borderRadius: BorderRadius.circular(16),
-      color: Colors.white.withValues(alpha: 0.94),
-      child: Padding(
-        padding: const EdgeInsets.all(4),
-        child: Column(
-          spacing: 2,
-          children: [
-            IconButton(
-              visualDensity: .compact,
-              iconSize: 19,
-              tooltip: tr.session.pen,
-              isSelected: _tool == BoardTool.pen,
-              icon: const Icon(Symbols.edit),
-              onPressed: () => setState(() => _tool = BoardTool.pen),
-            ),
-            IconButton(
-              visualDensity: .compact,
-              iconSize: 20,
-              tooltip: tr.session.lineTool,
-              isSelected: _tool == BoardTool.line,
-              icon: const Icon(Symbols.diagonal_line),
-              onPressed: () => setState(() => _tool = BoardTool.line),
-            ),
-            IconButton(
-              visualDensity: .compact,
-              iconSize: 17,
-              tooltip: tr.session.eraser,
-              isSelected: _tool == BoardTool.eraser,
-              icon: const Icon(Symbols.cleaning_services),
-              onPressed: () => setState(() => _tool = BoardTool.eraser),
-            ),
-            IconButton(
-              visualDensity: .compact,
-              iconSize: 20,
-              tooltip: tr.session.undo,
-              icon: const Icon(Symbols.undo),
-              onPressed: c.board.canUndo
-                  ? () {
-                      c.board.undo();
-                    }
-                  : null,
-            ),
-            IconButton(
-              visualDensity: .compact,
-              iconSize: 20,
-              tooltip: tr.session.redo,
-              icon: const Icon(Symbols.redo),
-              onPressed: c.board.canRedo
-                  ? () {
-                      c.board.redo();
-                    }
-                  : null,
-            ),
-            IconButton(
-              visualDensity: .compact,
-              iconSize: 22,
-              tooltip: tr.session.clearBoard,
-              icon: const Icon(Symbols.delete_sweep),
-              onPressed: _confirmClear,
-            ),
-            const SizedBox(height: 6),
-            Tooltip(
-              message: tr.session.penColor,
-              child: GestureDetector(
-                onTap: _pickPenColor,
-                child: Container(
-                  width: 24,
-                  height: 24,
-                  decoration: BoxDecoration(
-                    color: _penColor,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.black26, width: 2),
-                  ),
-                  child: const Icon(
-                    Symbols.palette,
-                    size: 13,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 6),
-            Tooltip(
-              message: _isEraser
-                  ? tr.session.eraserWidth
-                  : tr.session.strokeWidth,
-              child: SizedBox(
-                width: 28,
-                height: 56,
-                child: RotatedBox(
-                  quarterTurns: 1,
-                  child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      thumbShape: RoundSliderThumbShape(
-                        enabledThumbRadius: 8.0,
-                      ),
-                    ),
-                    child: Slider(
-                      value: _activeWidth,
-                      min: 2,
-                      max: _isEraser ? 40 : 12,
-                      divisions: _isEraser ? 21 : 10,
-                      label: _activeWidth.round().toString(),
-                      onChanged: (v) => setState(() => _activeWidth = v),
-                      padding: .zero,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            Text(
-              _activeWidth.round().toString(),
-              style: const TextStyle(fontSize: 10, color: Colors.black54),
-            ),
-          ],
-        ),
-      ),
+  Widget _widthSliderControl(BuildContext context) => SliderTheme(
+    data: SliderTheme.of(context).copyWith(
+      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8.0),
     ),
+    child: Slider(
+      value: _activeWidth,
+      min: 2,
+      max: _isEraser ? 40 : 12,
+      divisions: _isEraser ? 21 : 10,
+      label: _activeWidth.round().toString(),
+      onChanged: (v) => setState(() => _activeWidth = v),
+      padding: .zero,
+    ),
+  );
+
+  /// Board toolbar. On wide layouts every control is shown; on
+  /// compact ones only the primary tools (through redo) are visible by
+  /// default and the rest sit behind a "more" toggle which opens a
+  /// short panel floating to the side of the bar - never a taller bar,
+  /// so it stays usable in landscape on small screens.
+  Widget _toolbar(bool compact) => ListenableBuilder(
+    listenable: c.board,
+    builder: (context, _) {
+      Widget toolButton({
+        required String tooltip,
+        required IconData icon,
+        required BoardTool value,
+        double iconSize = 20,
+      }) => IconButton(
+        visualDensity: .compact,
+        iconSize: iconSize,
+        tooltip: tooltip,
+        isSelected: _tool == value,
+        icon: Icon(icon),
+        onPressed: () => setState(() => _tool = value),
+      );
+
+      final primary = <Widget>[
+        toolButton(
+          tooltip: tr.session.panTool,
+          icon: Symbols.pan_tool,
+          value: BoardTool.pan,
+          iconSize: 18,
+        ),
+        toolButton(
+          tooltip: tr.session.pen,
+          icon: Symbols.edit,
+          value: BoardTool.pen,
+          iconSize: 19,
+        ),
+        toolButton(
+          tooltip: tr.session.lineTool,
+          icon: Symbols.diagonal_line,
+          value: BoardTool.line,
+        ),
+        toolButton(
+          tooltip: tr.session.eraser,
+          icon: Symbols.cleaning_services,
+          value: BoardTool.eraser,
+          iconSize: 17,
+        ),
+        IconButton(
+          visualDensity: .compact,
+          iconSize: 20,
+          tooltip: tr.session.undo,
+          icon: const Icon(Symbols.undo),
+          onPressed: c.board.canUndo ? () => c.board.undo() : null,
+        ),
+        IconButton(
+          visualDensity: .compact,
+          iconSize: 20,
+          tooltip: tr.session.redo,
+          icon: const Icon(Symbols.redo),
+          onPressed: c.board.canRedo ? () => c.board.redo() : null,
+        ),
+      ];
+
+      final clearButton = IconButton(
+        visualDensity: .compact,
+        iconSize: 22,
+        tooltip: tr.session.clearBoard,
+        icon: const Icon(Symbols.delete_sweep),
+        onPressed: _confirmClear,
+      );
+      final colorButton = Tooltip(
+        message: tr.session.penColor,
+        child: GestureDetector(
+          onTap: _pickPenColor,
+          child: Container(
+            width: 24,
+            height: 24,
+            decoration: BoxDecoration(
+              color: _penColor,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.black26, width: 2),
+            ),
+            child: const Icon(Symbols.palette, size: 13, color: Colors.white),
+          ),
+        ),
+      );
+      Widget widthSlider({required bool horizontal}) => Tooltip(
+        message: _isEraser ? tr.session.eraserWidth : tr.session.strokeWidth,
+        child: SizedBox(
+          width: horizontal ? 104 : 28,
+          height: horizontal ? 28 : 56,
+          child: horizontal
+              ? _widthSliderControl(context)
+              : RotatedBox(
+                  quarterTurns: 1,
+                  child: _widthSliderControl(context),
+                ),
+        ),
+      );
+      final widthLabel = Text(
+        _activeWidth.round().toString(),
+        style: const TextStyle(fontSize: 10, color: Colors.black54),
+      );
+      // Wide layout: extras stack under the primary tools in the bar.
+      final extra = <Widget>[
+        clearButton,
+        const SizedBox(height: 6),
+        colorButton,
+        const SizedBox(height: 6),
+        widthSlider(horizontal: false),
+        widthLabel,
+      ];
+      // Compact layout: extras live in a short horizontal panel that
+      // floats to the SIDE of the bar (see below), so opening "more"
+      // never makes the bar taller - vital in landscape, where the
+      // vertical space is the scarce dimension.
+      final extraPanel = Material(
+        elevation: 2,
+        borderRadius: BorderRadius.circular(16),
+        color: Colors.white.withValues(alpha: 0.94),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              clearButton,
+              const SizedBox(width: 4),
+              colorButton,
+              const SizedBox(width: 4),
+              widthSlider(horizontal: true),
+              widthLabel,
+            ],
+          ),
+        ),
+      );
+
+      final bar = Material(
+        elevation: 2,
+        borderRadius: BorderRadius.circular(16),
+        color: Colors.white.withValues(alpha: 0.94),
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: Column(
+            spacing: 2,
+            children: [
+              ...primary,
+              if (!compact)
+                ...extra
+              else
+                IconButton(
+                  visualDensity: .compact,
+                  iconSize: 20,
+                  tooltip: tr.session.more,
+                  icon: const Icon(Symbols.more_horiz),
+                  onPressed: () =>
+                      setState(() => _toolbarMoreOpen = !_toolbarMoreOpen),
+                ),
+            ],
+          ),
+        ),
+      );
+      if (!compact || !_toolbarMoreOpen) return bar;
+      // The toolbar floats over the board (Positioned in the Stack),
+      // so this side panel is a true overlay: it extends rightwards
+      // over the board instead of growing the bar downwards.
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [bar, const SizedBox(width: 8), extraPanel],
+      );
+    },
   );
 
   /// Colour picker overlay: a compact swatch palette shown on demand

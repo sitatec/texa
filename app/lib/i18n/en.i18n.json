@@ -336,6 +336,10 @@
     "@pen": {
       "description": "Pen tool tooltip."
     },
+    "panTool": "Pan / move board",
+    "@panTool": {
+      "description": "Tooltip for the pan tool, which drags the board around instead of drawing."
+    },
     "lineTool": "Straight line",
     "@lineTool": {
       "description": "Tooltip for the straight-line drawing tool."

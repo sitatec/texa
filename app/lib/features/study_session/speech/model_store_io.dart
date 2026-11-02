@@ -6,7 +6,6 @@ import 'package:path_provider/path_provider.dart';
 
 import 'model_store.dart';
 
-
 int getOptimalThreadsImpl(int maxThreads) {
   return min(max(1, Platform.numberOfProcessors), maxThreads);
 }

@@ -7,6 +7,11 @@ const double boardHeight = 1200;
 const Size boardSize = Size(boardWidth, boardHeight);
 const String apiBaseUrl = 'https://api.meta.ai/v1';
 const String ignoreTurnSentinel = '<[IGNORE_TURN]>';
+
+/// Output by the model (exactly, alone) after a tool result when the
+/// turn is complete and there is nothing relevant left to say or do -
+/// the app ends the turn silently instead of speaking filler.
+const String turnDoneSentinel = '<[TURN_DONE]>';
 const int frameIntervalMs = 1000;
 const int frameWidth = 720;
 const int frameHeight = 540;
@@ -31,13 +36,23 @@ const String kokoroBaseUrl = String.fromEnvironment(
 /// Base URL the individual Piper files (`model.onnx`, `tokens.txt`)
 /// are downloaded from; the file name is appended to it. Piper reuses
 /// Kokoro's lexicon, so it has no lexicon file of its own here.
+/// Base URL of the Kokoro-82M ONNX repo used on WEB only (kokoro-js).
+/// HF form ends in `/resolve/main/`; a local mirror ends at the repo
+/// root (files directly inside). See texa-webspeech kokoro-source.js.
+/// Dev example: --dart-define=KOKORO_WEB_BASE_URL=http://localhost:8765/sitatech/Kokoro-82M-v1.0-ONNX/
+const String kokoroWebBaseUrl = String.fromEnvironment(
+  'KOKORO_WEB_BASE_URL',
+  defaultValue:
+      'https://huggingface.co/sitatech/Kokoro-82M-v1.0-ONNX/resolve/main/',
+);
+
 const String piperBaseUrl = String.fromEnvironment(
   'PIPER_BASE_URL',
-  defaultValue: 'https://huggingface.co/sitatech/vits-piper-en_US-hfc_female-medium/resolve/main/',
+  defaultValue: 'https://huggingface.co/sitatech/vits-piper-en_US-amy-medium/resolve/main/',
 );
 const String sileroVadModelUrl = String.fromEnvironment(
   'SILERO_VAD_MODEL_URL',
-  defaultValue: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx',
+  defaultValue: 'https://github.com/snakers4/silero-vad/raw/bfdc0193023f121ea5b3cc7b176dbed570a68a59/src/silero_vad/data/silero_vad.onnx',
 );
 const String smartTurnModelUrl = String.fromEnvironment(
   'SMART_TURN_MODEL_URL',

@@ -11,7 +11,7 @@ import '../board_controller.dart';
 import 'board_models.dart';
 import 'plot_preview.dart';
 
-enum BoardTool { pen, line, eraser }
+enum BoardTool { pan, pen, line, eraser }
 
 /// The unified landscape board: student ink, AI text/math/SVG/plots.
 ///
@@ -73,6 +73,11 @@ class _BoardViewState extends State<BoardView> {
   BoardTool get tool => widget.tool;
 
   void _pointerDown(PointerDownEvent e) {
+    // Pan tool: draw nothing and report nothing. Crucially,
+    // onDrawPointerDown is not called, so the host never disables the
+    // surrounding InteractiveViewer and the drag becomes a board pan
+    // (single finger / mouse, no trackpad or pinch needed).
+    if (tool == BoardTool.pan) return;
     if (_activePointer != null) {
       // Second finger: abandon the stroke so a pinch can take over.
       if (tool != BoardTool.eraser) {
@@ -99,6 +104,7 @@ class _BoardViewState extends State<BoardView> {
   }
 
   void _pointerMove(PointerMoveEvent e) {
+    if (tool == BoardTool.pan) return;
     if (e.pointer != _activePointer) return;
     if (tool == BoardTool.eraser) {
       widget.onErase(e.localPosition);
@@ -108,6 +114,7 @@ class _BoardViewState extends State<BoardView> {
   }
 
   void _pointerUp(PointerEvent e) {
+    if (tool == BoardTool.pan) return;
     if (e.pointer != _activePointer) return;
     _activePointer = null;
     widget.onDrawPointerUp?.call();
@@ -120,92 +127,100 @@ class _BoardViewState extends State<BoardView> {
 
   @override
   Widget build(BuildContext context) {
-    return RepaintBoundary(
-      key: widget.captureKey,
-      child: Container(
-        width: boardWidth,
-        height: boardHeight,
-        color: Colors.white,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: ListenableBuilder(
-                listenable: controller,
-                builder: (context, _) {
-                  final elements = controller.elements;
-                  return Stack(
-                    children: [
-                      Positioned.fill(
-                        child: CustomPaint(
-                          painter: _BoardPainter(elements, controller.revision),
+    return MouseRegion(
+      cursor: tool == BoardTool.pan
+          ? SystemMouseCursors.grab
+          : SystemMouseCursors.basic,
+      child: RepaintBoundary(
+        key: widget.captureKey,
+        child: Container(
+          width: boardWidth,
+          height: boardHeight,
+          color: Colors.white,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: ListenableBuilder(
+                  listenable: controller,
+                  builder: (context, _) {
+                    final elements = controller.elements;
+                    return Stack(
+                      children: [
+                        Positioned.fill(
+                          child: CustomPaint(
+                            painter: _BoardPainter(
+                              elements,
+                              controller.revision,
+                            ),
+                          ),
                         ),
-                      ),
-                      ...elements
-                          .where(
-                            (e) =>
-                                e.kind != BoardElementKind.stroke &&
-                                e.kind != BoardElementKind.plot &&
-                                e.kind != BoardElementKind.landmark,
-                          )
-                          .map(
-                            (e) => Positioned(
-                              key: ValueKey(e.id),
-                              left: e.x,
-                              top: e.y,
-                              // Text wraps at the board's right edge
-                              // and takes whatever height its lines
-                              // need - its stored box is measured from
-                              // the content, and legacy boxes saved
-                              // with a fixed height must not clip it.
-                              width: e.kind == BoardElementKind.text
-                                  ? math.min(
-                                      e.width,
-                                      math.max(1.0, boardWidth - e.x),
-                                    )
-                                  : e.width,
-                              height: e.kind == BoardElementKind.text
-                                  ? null
-                                  : math.max(24, e.height),
-                              child: RepaintBoundary(
-                                child: Opacity(
-                                  opacity: e.progress,
-                                  child: _elementWidget(e),
+                        ...elements
+                            .where(
+                              (e) =>
+                                  e.kind != BoardElementKind.stroke &&
+                                  e.kind != BoardElementKind.plot &&
+                                  e.kind != BoardElementKind.landmark,
+                            )
+                            .map(
+                              (e) => Positioned(
+                                key: ValueKey(e.id),
+                                left: e.x,
+                                top: e.y,
+                                // Text wraps at the board's right edge
+                                // and takes whatever height its lines
+                                // need - its stored box is measured from
+                                // the content, and legacy boxes saved
+                                // with a fixed height must not clip it.
+                                width: e.kind == BoardElementKind.text
+                                    ? math.min(
+                                        e.width,
+                                        math.max(1.0, boardWidth - e.x),
+                                      )
+                                    : e.width,
+                                height: e.kind == BoardElementKind.text
+                                    ? null
+                                    : math.max(24, e.height),
+                                child: RepaintBoundary(
+                                  child: Opacity(
+                                    opacity: e.progress,
+                                    child: _elementWidget(e),
+                                  ),
                                 ),
                               ),
                             ),
+                        if (controller.pointer != null)
+                          Positioned(
+                            left: controller.pointer!.pos.dx - 10,
+                            top: controller.pointer!.pos.dy - 10,
+                            child: _Pointer(label: controller.pointer!.label),
                           ),
-                      if (controller.pointer != null)
-                        Positioned(
-                          left: controller.pointer!.pos.dx - 10,
-                          top: controller.pointer!.pos.dy - 10,
-                          child: _Pointer(label: controller.pointer!.label),
-                        ),
-                    ],
-                  );
-                },
+                      ],
+                    );
+                  },
+                ),
               ),
-            ),
-            Positioned.fill(
-              child: ListenableBuilder(
-                listenable: controller.activeStrokeTick,
-                builder: (context, _) => CustomPaint(
-                  painter: _ActiveStrokePainter(
-                    controller.activeStroke,
-                    controller.activeStrokeTick.value,
+              Positioned.fill(
+                child: ListenableBuilder(
+                  listenable: controller.activeStrokeTick,
+                  builder: (context, _) => CustomPaint(
+                    painter: _ActiveStrokePainter(
+                      controller.activeStroke,
+                      controller.activeStrokeTick.value,
+                    ),
                   ),
                 ),
               ),
-            ),
-            Positioned.fill(
-              child: Listener(
-                behavior: HitTestBehavior.opaque,
-                onPointerDown: _pointerDown,
-                onPointerMove: _pointerMove,
-                onPointerUp: _pointerUp,
-                onPointerCancel: _pointerUp,
+              Positioned.fill(
+                child: Listener(
+                  behavior: HitTestBehavior.opaque,
+                  onPointerDown: _pointerDown,
+                  onPointerMove: _pointerMove,
+                  onPointerUp: _pointerUp,
+                  onPointerCancel: _pointerUp,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -219,12 +234,9 @@ class _BoardViewState extends State<BoardView> {
           child: Text(
             e.text ?? '',
             softWrap: true,
-            style: TextStyle(
-              color: e.color,
-              fontSize: e.size,
-              fontFamily: 'GoogleSansFlex',
-              height: 1.15,
-            ),
+            // Must stay identical to the style BoardController measures
+            // with, or the measured box no longer fits the rendered text.
+            style: BoardController.boardTextStyle(e.size, color: e.color),
           ),
         ),
         BoardElementKind.math => Align(

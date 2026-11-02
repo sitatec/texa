@@ -103,6 +103,87 @@ void main() {
     await tester.pump();
   });
 
+  testWidgets('pan tool drags draw nothing and report no pointer', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1700, 1300);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final controller = BoardController();
+    var strokeStarts = 0;
+    var drawPointerDowns = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BoardView(
+            controller: controller,
+            tool: BoardTool.pan,
+            penColor: const Color(0xFF000000),
+            penWidth: 24,
+            onStrokeStart: () => strokeStarts++,
+            onStrokeUpdate: (_) {},
+            onStrokeEnd: () {},
+            onErase: (_) {},
+            onDrawPointerDown: () => drawPointerDowns++,
+          ),
+        ),
+      ),
+    );
+    final gesture = await tester.startGesture(const Offset(200, 200));
+    await gesture.moveBy(const Offset(120, 60));
+    await gesture.up();
+    await tester.pump();
+    // No stroke was started or reported: in the session screen the
+    // missing onDrawPointerDown is what leaves the surrounding
+    // InteractiveViewer enabled, so this drag pans the board instead.
+    expect(strokeStarts, 0);
+    expect(drawPointerDowns, 0);
+    expect(controller.activeStroke, isNull);
+    expect(controller.elements, isEmpty);
+  });
+
+  testWidgets('pan tool drag actually pans an InteractiveViewer host', (
+    tester,
+  ) async {
+    // Smaller than the 1600x1200 board on both axes, like a real
+    // session viewport, so the viewer has somewhere to pan to.
+    tester.view.physicalSize = const Size(1000, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final controller = BoardController();
+    final transform = TransformationController();
+    addTearDown(transform.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: InteractiveViewer(
+            transformationController: transform,
+            constrained: false,
+            child: BoardView(
+              controller: controller,
+              tool: BoardTool.pan,
+              penColor: const Color(0xFF000000),
+              penWidth: 24,
+              onStrokeStart: () {},
+              onStrokeUpdate: (_) {},
+              onStrokeEnd: () {},
+              onErase: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+    final before = transform.value.getTranslation();
+    final gesture = await tester.startGesture(const Offset(300, 300));
+    await gesture.moveBy(const Offset(-30, -10));
+    await gesture.moveBy(const Offset(-90, -40));
+    await gesture.up();
+    await tester.pump();
+    final after = transform.value.getTranslation();
+    expect(after.x, isNot(closeTo(before.x, 0.01)));
+    expect(after.y, isNot(closeTo(before.y, 0.01)));
+  });
+
   test('eraser splits a stroke instead of bridging or deleting it', () {
     final c = BoardController();
     c.elements = [

@@ -50,6 +50,43 @@ void main() {
     videoBase64: videoBase64 ?? '',
   );
 
+  group('turn contract', () {
+    test('instructions tell the model it may end with TURN_DONE', () async {
+      final h = harness(
+        sse: 'data: {"type":"response.output_text.delta","delta":"hi"}\n\ndata: [DONE]\n\n',
+      );
+      final client = AiClient('key', client: h.client);
+      await turn(client).toList();
+      expect(h.lastBody()['instructions'], contains('<[TURN_DONE]>'));
+      expect(h.lastBody()['instructions'], contains('tool result'));
+    });
+
+    test('prior (superseded) videos precede the current board video', () async {
+      final h = harness(
+        sse: 'data: {"type":"response.output_text.delta","delta":"hi"}\n\ndata: [DONE]\n\n',
+      );
+      final client = AiClient('key', client: h.client);
+      await client
+          .streamTurn(
+            model: 'test-model',
+            history: const [],
+            videoBase64: 'BOARDVIDEO',
+            priorVideosBase64: const ['OLDVIDEO'],
+          )
+          .toList();
+      final input = h.lastBody()['input'] as List;
+      final content = (input.last as Map)['content'] as List;
+      final videos = content
+          .where((c) => c['type'] == 'input_video')
+          .map((c) => c['video_url'])
+          .toList();
+      expect(videos, [
+        'data:video/mp4;base64,OLDVIDEO',
+        'data:video/mp4;base64,BOARDVIDEO',
+      ]);
+    });
+  });
+
   group('upload request parts', () {
     test('image, video, audio and document use different parts', () async {
       final h = harness(
@@ -421,6 +458,140 @@ void main() {
       expect(savedCall['output'], contains('write_math performed.'));
     });
 
+    // Regression (real API event order): the call_id only appears on
+    // the output item, which arrives *after* function_call_arguments
+    // .done. Finishing the call at arguments.done used to lock in an
+    // empty id, and the follow-up then sent an invented
+    // 'call_write_text', which the server rejects with a 400
+    // ("function_call_output call_id ... does not match any
+    // function_call in the request or its previous_response_id chain").
+    test('call_id from the output item, arriving after arguments, is '
+        'used for the tool result', () async {
+      String realisticToolRound() => [
+        evt({
+          'type': 'response.created',
+          'response': {'id': 'resp_1'},
+        }),
+        evt({
+          'type': 'response.output_item.added',
+          'item': {
+            'type': 'function_call',
+            'id': 'fc1',
+            'call_id': 'call_write_text',
+            'name': 'write_text',
+            'arguments': '',
+          },
+        }),
+        evt({
+          'type': 'response.function_call_arguments.delta',
+          'item_id': 'fc1',
+          'delta': '{"text":"Functions"}',
+        }),
+        evt({
+          'type': 'response.function_call_arguments.done',
+          'item_id': 'fc1',
+          'name': 'write_text',
+          'arguments': '{"text":"Functions"}',
+        }),
+        evt({
+          'type': 'response.output_item.done',
+          'item': {
+            'type': 'function_call',
+            'id': 'fc1',
+            'call_id': 'call_write_text',
+            'name': 'write_text',
+            'arguments': '{"text":"Functions"}',
+          },
+        }),
+        evt({
+          'type': 'response.completed',
+          'response': {
+            'id': 'resp_1',
+            'output': [
+              {
+                'type': 'function_call',
+                'id': 'fc1',
+                'call_id': 'call_write_text',
+                'name': 'write_text',
+                'arguments': '{"text":"Functions"}',
+              },
+            ],
+          },
+        }),
+        'data: [DONE]\n\n',
+      ].join();
+
+      final h = sequence([realisticToolRound(), textRound('resp_2', 'Done')]);
+      final executed = <String>[];
+      final events = await AiClient('key', client: h.client)
+          .streamTurn(
+            videoBase64: '',
+            model: 'test-model',
+            history: const [],
+            executeToolCall: (name, args) async {
+              executed.add(name);
+              return const AiToolResult.success('performed');
+            },
+          )
+          .toList();
+
+      expect(executed, ['write_text']);
+      expect(
+        events.whereType<AiToolCallComplete>().single.callId,
+        'call_write_text',
+      );
+      expect(h.bodies, hasLength(2));
+      final followUpInput = h.bodies[1]['input'] as List;
+      expect((followUpInput.single as Map)['call_id'], 'call_write_text');
+      expect((events.last as AiStreamDone).fullText, 'Done');
+    });
+
+    test('a tool call that never receives a call_id fails instead of '
+        'inventing one', () async {
+      final noIdRound = [
+        evt({
+          'type': 'response.created',
+          'response': {'id': 'resp_1'},
+        }),
+        evt({
+          'type': 'response.function_call_arguments.done',
+          'item_id': 'fc1',
+          'name': 'write_text',
+          'arguments': '{"text":"Functions"}',
+        }),
+        evt({
+          'type': 'response.completed',
+          'response': {'id': 'resp_1', 'output': []},
+        }),
+        'data: [DONE]\n\n',
+      ].join();
+      final h = sequence([noIdRound, textRound('resp_2', 'Done')]);
+      var executed = 0;
+      await expectLater(
+        AiClient('key', client: h.client)
+            .streamTurn(
+              videoBase64: '',
+              model: 'test-model',
+              history: const [],
+              executeToolCall: (name, args) async {
+                executed++;
+                return const AiToolResult.success('performed');
+              },
+            )
+            .toList(),
+        throwsA(
+          isA<Exception>().having(
+            (e) => e.toString(),
+            'message',
+            contains('call id'),
+          ),
+        ),
+      );
+      // Nothing performed, and no follow-up request was sent.
+      expect(executed, 0);
+      expect(h.bodies, hasLength(1));
+    });
+
     test(
       'a failing tool is reported as an error and the loop continues',
       () async {
@@ -441,6 +612,30 @@ void main() {
         expect(output, contains('"status":"error"'));
         expect(output, contains('no such element'));
         expect((events.last as AiStreamDone).fullText, 'Recovered');
+      },
+    );
+
+    // Regression: dart_openai closes the client handed to createStream
+    // when the stream ends. With a real (close-sensitive) transport the
+    // function_call_output round used to fail with "Client is already
+    // closed"; MockClient hides that because its close() is a no-op.
+    test(
+      'tool loop survives a transport that refuses reuse after close',
+      () async {
+        final h = sequence([toolRound(), textRound('resp_2', 'Done')]);
+        final events =
+            await AiClient('key', client: _CloseSensitiveClient(h.client))
+                .streamTurn(
+                  videoBase64: '',
+                  model: 'test-model',
+                  history: const [],
+                  executeToolCall: (name, args) async =>
+                      const AiToolResult.success('performed'),
+                )
+                .toList();
+
+        expect(h.bodies, hasLength(2));
+        expect((events.last as AiStreamDone).fullText, 'Done');
       },
     );
 
@@ -494,4 +689,28 @@ void main() {
       );
     });
   });
+}
+
+/// A transport with the real `http.Client` contract: once [close] has
+/// been called, [send] throws. (package:http's MockClient does not
+/// enforce this, which is how the "client already closed" bug shipped.)
+class _CloseSensitiveClient extends http.BaseClient {
+  _CloseSensitiveClient(this._inner);
+
+  final http.Client _inner;
+  bool _closed = false;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    if (_closed) {
+      throw http.ClientException(
+        'HTTP request failed. Client is already closed.',
+        request.url,
+      );
+    }
+    return _inner.send(request);
+  }
+
+  @override
+  void close() => _closed = true;
 }

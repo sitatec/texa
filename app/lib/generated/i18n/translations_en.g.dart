@@ -518,6 +518,11 @@ class Translations$session$en {
   /// en: 'Pen'
   String get pen => 'Pen';
 
+  /// Tooltip for the pan tool, which drags the board around instead of drawing.
+  ///
+  /// en: 'Pan / move board'
+  String get panTool => 'Pan / move board';
+
   /// Tooltip for the straight-line drawing tool.
   ///
   /// en: 'Straight line'
@@ -933,6 +938,7 @@ extension on Translations {
       'session.listenHint' => 'I\'m listening — tell me what you\'re doing',
       'session.stop' => 'Stop',
       'session.pen' => 'Pen',
+      'session.panTool' => 'Pan / move board',
       'session.lineTool' => 'Straight line',
       'session.penColor' => 'Pen colour',
       'session.eraser' => 'Eraser',

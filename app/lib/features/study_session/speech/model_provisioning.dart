@@ -34,7 +34,7 @@ class ModelProvisioningService {
     'lexicon-en-us.txt',
   ];
 
-  static const _piperDirName = 'vits-piper-en_US-hfc_female-medium';
+  static const _piperDirName = 'vits-piper-en_US-amy-medium';
 
   /// The Piper files downloaded from [piperBaseUrl]. Piper reuses
   /// Kokoro's lexicon (see [_kokoroFiles]), so it is not listed here.
@@ -53,6 +53,10 @@ class ModelProvisioningService {
 
   /// Whether the models for [engine] (plus the shared VAD) are installed.
   Future<bool> isReadyFor(TtsEngine engine) async {
+    // On web, Kokoro (kokoro-js) and Piper (piper-tts-web) download and
+    // cache their own models on first worker init, so Dart-side
+    // readiness is only about the shared VAD/Smart Turn models.
+    if (kIsWeb) return isVadReady;
     if (!await _verified || !await _store.exists('silero_vad.onnx')) {
       return false;
     }
@@ -127,6 +131,49 @@ class ModelProvisioningService {
     TtsEngine engine = TtsEngine.kokoro,
   }) async {
     await _store.activate();
+    if (kIsWeb) {
+      // Web TTS engines self-provision (see isReadyFor); only the shared
+      // VAD + Smart Turn models are downloaded Dart-side.
+      if (!await _store.exists('silero_vad.onnx')) {
+        await _store.writeBytes(
+          'silero_vad.onnx',
+          await _download(
+            sileroVadModelUrl,
+            'Silero listening',
+            (f) => onProgress('Silero listening', f * 0.7),
+          ),
+        );
+      } else {
+        onProgress('Silero listening', 0.7);
+      }
+      try {
+        if (!await _store.exists('smart-turn-v3.2-int8.onnx')) {
+          await _store.writeBytes(
+            'smart-turn-v3.2-int8.onnx',
+            await _download(
+              smartTurnModelUrl,
+              'Smart Turn',
+              (f) => onProgress('Smart Turn', 0.7 + f * 0.3),
+            ),
+          );
+        }
+      } catch (_) {
+        // Smart Turn is an optional refinement; VAD alone still works.
+      }
+      await _store.writeBytes(
+        'models.json',
+        utf8.encode(
+          jsonEncode({
+            'verified': true,
+            'engine': engine.name,
+            'vad': sileroVadModelUrl,
+            'installedAt': DateTime.now().toIso8601String(),
+          }),
+        ),
+      );
+      onProgress('Speech', 1);
+      return;
+    }
     // (store path, download URL, label) for every file this engine needs.
     final downloads = switch (engine) {
       TtsEngine.kokoro => [

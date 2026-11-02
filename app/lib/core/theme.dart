@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 const texaRed = Color(0xFFEF6666);
@@ -8,6 +9,7 @@ const texaYellow = Color(0xFFFBBF24);
 final _primaryColor = texaBlue;
 
 final _defaultButtonStyle = ButtonStyle(
+  visualDensity: kIsWeb ? .comfortable : null, //null=default
   shape: WidgetStatePropertyAll(
     RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
   ),

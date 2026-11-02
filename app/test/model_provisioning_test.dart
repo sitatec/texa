@@ -104,12 +104,8 @@ void main() {
       expect(
         requested,
         containsAll([
-          endsWith(
-            'vits-piper-en_US-hfc_female-medium/resolve/main/model.onnx',
-          ),
-          endsWith(
-            'vits-piper-en_US-hfc_female-medium/resolve/main/tokens.txt',
-          ),
+          endsWith('vits-piper-en_US-amy-medium/resolve/main/model.onnx'),
+          endsWith('vits-piper-en_US-amy-medium/resolve/main/tokens.txt'),
           endsWith('kokoro-multi-lang-v1_0/resolve/main/lexicon-en-us.txt'),
         ]),
       );
@@ -118,15 +114,9 @@ void main() {
         endsWith('/lexicon-en-us.txt'),
       ]);
       final paths = await service.ttsPathsFor(TtsEngine.piper);
-      expect(
-        paths.model,
-        endsWith('vits-piper-en_US-hfc_female-medium/model.onnx'),
-      );
+      expect(paths.model, endsWith('vits-piper-en_US-amy-medium/model.onnx'));
       expect(paths.voices, isNull);
-      expect(
-        paths.tokens,
-        endsWith('vits-piper-en_US-hfc_female-medium/tokens.txt'),
-      );
+      expect(paths.tokens, endsWith('vits-piper-en_US-amy-medium/tokens.txt'));
       expect(
         paths.lexicon,
         endsWith('kokoro-multi-lang-v1_0/lexicon-en-us.txt'),

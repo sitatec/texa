@@ -51,6 +51,24 @@ ParsedReply parseReply(
   if (text.contains(ignoreTurnSentinel)) {
     return const ParsedReply(kind: 'invalidSentinel');
   }
+  // <[TURN_DONE]> is the model closing the turn after tool results:
+  // when it is all that remains of the text the reply is 'turnDone'
+  // (its tool calls still count - they were performed). Stray
+  // occurrences next to real speech are stripped and the speech is
+  // kept, so the sentinel is never spoken or displayed.
+  if (text.contains(turnDoneSentinel)) {
+    final spoken = text.replaceAll(turnDoneSentinel, '').trim();
+    if (spoken.isEmpty) return const ParsedReply(kind: 'turnDone');
+    final items = <PlaybackItem>[
+      TextItem(spoken),
+      for (final call in toolCalls)
+        if (call.name == 'resume_explanation')
+          ResumeItem()
+        else
+          ActionItem(call.name, call.args),
+    ];
+    return ParsedReply(kind: 'normal', items: items, text: spoken);
+  }
   final items = <PlaybackItem>[];
   if (text.isNotEmpty) items.add(TextItem(text));
   for (final call in toolCalls) {
