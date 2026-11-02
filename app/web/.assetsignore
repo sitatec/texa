@@ -5,3 +5,5 @@ wrangler.jsonc
 .wrangler
 .assetsignore
 *.map
+texa-webspeech
+assets/packages/sherpa_onnx_web
