@@ -126,6 +126,39 @@ class SessionController extends ChangeNotifier {
   final AudioRecorder _recorder = AudioRecorder();
   SpeechVad? _vad;
   final List<double> _vadBuffer = [];
+
+  /// Rolling buffer of the most recent mic audio, kept whether or not a
+  /// turn is being captured. Capture only starts once the VAD fires, so
+  /// without this the onset of speech (up to a whole short word) is lost
+  /// from the recording; on capture start the buffer is prepended so the
+  /// voice is heard in full with a little leading silence.
+  static const int _preRollMs = 600;
+  static const int _tailHangoverMs = 200;
+  final List<Uint8List> _preRoll = [];
+  int _preRollBytes = 0;
+
+  /// When the last board frame was sent to the turn encoder. Used at
+  /// finalise time to decide whether a closing board frame is needed
+  /// (see the frame-count logic in [_finaliseCapture]).
+  DateTime? _lastFrameAt;
+
+  void _pushPreRoll(Uint8List data) {
+    _preRoll.add(data);
+    _preRollBytes += data.length;
+    final maxBytes = _sampleRate * 2 * _preRollMs ~/ 1000;
+    while (_preRollBytes > maxBytes && _preRoll.isNotEmpty) {
+      final excess = _preRollBytes - maxBytes;
+      final first = _preRoll.first;
+      if (first.length <= excess) {
+        _preRoll.removeAt(0);
+        _preRollBytes -= first.length;
+      } else {
+        _preRoll[0] = Uint8List.sublistView(first, excess);
+        _preRollBytes -= excess;
+      }
+    }
+  }
+
   StreamSubscription<Uint8List>? _micSub;
   bool _micRunning = false;
   bool _hasMicPermission = false;
@@ -397,6 +430,7 @@ class SessionController extends ChangeNotifier {
       final rgba = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
       img.dispose();
       if (rgba != null && rgba.lengthInBytes == frameWidth * frameHeight * 4) {
+        _lastFrameAt = DateTime.now();
         _streamVideoFrame(Uint8List.fromList(rgba.buffer.asUint8List()));
       }
     } catch (e) {
@@ -499,6 +533,9 @@ class SessionController extends ChangeNotifier {
     final count = data.length ~/ 2;
     final vad = _vad;
     if (vad == null || _disposed) return;
+    // Every chunk feeds the pre-roll, capturing or not: it must already
+    // hold the student's first word on the chunk where the VAD fires.
+    _pushPreRoll(data);
     final view = ByteData.sublistView(data);
     var voice = false;
     try {
@@ -523,7 +560,7 @@ class SessionController extends ChangeNotifier {
         unawaited(interruptPlayback(fromVoice: true));
       }
       if (!_capturing && (state == TurnState.listening || _playing)) {
-        _beginCapture(now);
+        _beginCapture(now, current: data);
       }
       if (_capturing) _appendTurnSamples(data);
     } else if (_capturing) {
@@ -547,10 +584,17 @@ class SessionController extends ChangeNotifier {
     }
   }
 
-  void _beginCapture(DateTime now) {
+  void _beginCapture(DateTime now, {Uint8List? current}) {
     if (_capturing) return;
     _capturing = true;
     _turnSamples.clear();
+    // The chunk that triggered detection is excluded from the pre-roll
+    // seeding: the live path below appends it as usual, so including it
+    // here too would duplicate it in the recording.
+    for (final chunk in _preRoll) {
+      if (identical(chunk, current)) continue;
+      _appendTurnSamples(chunk);
+    }
     _smartTurnChecks = 0;
     // The student is speaking again: any error banner (with its retry
     // affordance) from the previous turn is stale, so drop it now
@@ -559,6 +603,12 @@ class SessionController extends ChangeNotifier {
     _speechStart = now;
     _drewDuringCapture = false;
     _startTurnEncoder();
+    // Prepend the pre-roll so the recording starts just before the
+    // student's first word instead of at the VAD's detection point.
+    for (final chunk in _preRoll) {
+      if (identical(chunk, current)) continue;
+      _bufferPcm(chunk);
+    }
     state = TurnState.capturing;
     notifyListeners();
     unawaited(_captureFrame());
@@ -621,9 +671,32 @@ class SessionController extends ChangeNotifier {
     }
     final suspended = _suspended;
     _suspended = null;
-    // One last frame of the finished board, then finalize — every
-    // earlier frame and audio second was encoded while capturing.
-    await _captureFrame();
+    // The video is 1 FPS, so its length is a whole number of seconds
+    // and the audio is padded/truncated to match. Cover exactly the
+    // audio we want to keep (pre-roll + speech + a short hangover) and
+    // no more: an unconditional final frame here used to force a whole
+    // extra second of trailing silence onto every recording. If the
+    // student drew during the turn and the periodic cadence has been
+    // quiet for a while, one closing board frame is still taken (at the
+    // cost of that second) so the finished board state is not lost.
+    final desiredSeconds = ((_preRollMs + speechMs + _tailHangoverMs) / 1000)
+        .ceil();
+    var guard = 0;
+    while (_framesAppended < desiredSeconds && guard++ < 3) {
+      final before = _framesAppended;
+      await _captureFrame();
+      await _encodeChain;
+      if (_framesAppended == before) break;
+    }
+    // Closing board frame: only when drawing may have changed the
+    // board since the last periodic frame (see note above).
+    if (_framesAppended >= desiredSeconds &&
+        _drewDuringCapture &&
+        (_lastFrameAt == null ||
+            DateTime.now().difference(_lastFrameAt!).inMilliseconds >= 900)) {
+      await _captureFrame();
+      await _encodeChain;
+    }
     final Uint8List mp4Bytes;
     try {
       mp4Bytes = await _finishTurnEncoder();
