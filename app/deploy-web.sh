@@ -25,6 +25,8 @@ fi
 
 echo "Deploying release $VERSION..."
 
+cd web/texa-webspeech && npm run build && cd ../../
+
 flutter build web --release --wasm
 
 # sherpa_onnx is not used in web so delete its heavy wasm files to reduce web startup time.

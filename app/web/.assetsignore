@@ -4,6 +4,7 @@ _routes.json
 wrangler.jsonc
 .wrangler
 .assetsignore
+.gitignore
 *.map
 texa-webspeech
 assets/packages/sherpa_onnx_web
