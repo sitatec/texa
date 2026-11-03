@@ -3,9 +3,9 @@
 | Field | Detail |
 |---|---|
 | Product | Texa — AI STEM Tutor |
-| Document version | 1.6 |
+| Document version | 1.7 |
 | Status | Draft for prototype (MVP) |
-| Version history | v1.1 (27 Oct 2026): fixed Meta AI base URL, per-session immutable model, confirmed encoder/endpoint media path, message-save ordering replacing mid-turn recovery |
+| Version history | v1.1 (27 Oct 2026): fixed Meta AI base URL, per-session immutable model, confirmed encoder/endpoint media path, message-save ordering replacing mid-turn recovery. v1.7 (2 Nov 2026): 4-video sliding window with transcribe-ahead turn-video transcripts (older turns sent as text, chain-breaking local replay), corrected §8.1 to match the client as implemented (timeouts, no automatic retry, nested `reasoning` parameter) |
 | Companion document | [Product Requirements Document](PRD.md) |
 | Codebase | Flutter app in `app/` (`texa`, Dart SDK ^3.13.5) |
 
@@ -17,7 +17,7 @@
 
 **Supported platforms (this version): Android, iOS, macOS, and Web.** Windows is planned and is explicitly not a supported or verified platform in this version — it is excluded from the §14 verification checks and §17 platform setup until its support milestone. Mobile (Android/iOS) remains the primary target; macOS and Web must build and run, with the session experience optimised for mobile first.
 
-No custom backend. The Flutter app is the whole system: UI, board engine, on-device speech (VAD + TTS via `sherpa-onnx`), turn media encoding, and a direct client to the Meta AI API (`dart_openai`, fixed base URL `https://api.meta.ai/v1`) using a user-supplied API key. The endpoint accepts video with embedded audio — this is a confirmed fact, not an assumption. Persistence is a local embedded database (`tostore`). 
+No custom backend. The Flutter app is the whole system: UI, board engine, on-device speech (VAD + TTS: `sherpa-onnx` on native, the first-party `texa-webspeech` workers on web — §16), turn media encoding, and a direct client to the Meta AI API (`dart_openai`, fixed base URL `https://api.meta.ai/v1`) using a user-supplied API key. The endpoint accepts video with embedded audio — this is a confirmed fact, not an assumption. Persistence is a local embedded database (`tostore`). 
 
 ```mermaid
 flowchart LR
@@ -25,9 +25,9 @@ flowchart LR
     UI["Home / Session UI"]
     Board["Unified Whiteboard<br/>custom CustomPainter engine"]
     Capture["Turn Capture<br/>1 FPS frames + mic audio"]
-    VAD["Silero VAD<br/>sherpa-onnx"]
+    VAD["Silero VAD + Smart Turn<br/>sherpa-onnx native · texa-webspeech web"]
     Playback["Playback Engine<br/>camera + draw animation"]
-    TTS["Kokoro TTS<br/>sherpa-onnx · sentence chunks"]
+    TTS["Kokoro / Piper TTS<br/>sherpa-onnx native · texa-webspeech web · sentence chunks"]
     Plot["Function Plotter<br/>math_expressions"]
     Render["SVG (flutter_svg) / LaTeX<br/>(flutter_math_fork) raster bake-in"]
     DB[("tostore tables + KV<br/>sessions · boards · messages · observations")]
@@ -64,7 +64,7 @@ flowchart LR
 | SVG rendering | `flutter_svg` ^2.3.0 | AI SVG → rasterised → baked onto canvas (§6.2) |
 | Maths rendering | `flutter_math_fork` ^0.7.4 | LaTeX → high-res raster → baked onto canvas (§6.3) |
 | Function plotting | `math_expressions` ^3.2.0 | Analytic evaluation on-device (§6.4) |
-| On-device speech | `sherpa_onnx` ^2.0.1 | Silero VAD + Kokoro TTS. **Smart Turn is Deferred** (needs custom sherpa-onnx build) |
+| On-device speech | Native: `sherpa_onnx` ^2.0.1. Web: `texa-webspeech` (first-party npm package in `app/web/texa-webspeech/`, §16.6) | One `SpeechEngine`/`SpeechVad` interface, two implementations. Silero VAD + Smart Turn end-of-turn detection; Kokoro or Piper TTS (user-selected, one engine at a time) |
 | Mic capture | `record` ^7.1.2 (+ `audio_session` ^0.2.4) | PCM/WAV capture; audio-session config for playback/recording coexistence |
 | TTS playback | `just_audio` ^0.10.6 | Sequential chunk playback with completion callbacks |
 | Turn video encoding | `flutter_quick_video_encoder` ^1.7.2 | 1 FPS board frames → lightweight video (§7) |
@@ -209,9 +209,9 @@ Parse `expression` with `math_expressions` (variable `x`), sample ≥200 points 
 
 ## 7. Student Turn Capture
 
-### 7.1 VAD & turn finalisation (MVP: VAD only)
-- Silero VAD via `sherpa_onnx` consumes the mic stream (16 kHz mono PCM from `record`, `audio_session` configured for record+playback).
-- State machine: `idle → (speech start) capturing → (~1000 ms continuous silence, constant `vadSilenceMs`) finalising → sending → aiPlaying → idle`. Smart Turn is **Deferred** (custom sherpa-onnx build required) and MUST NOT be referenced in MVP code paths.
+### 7.1 VAD & turn finalisation
+- Silero VAD consumes the mic stream (16 kHz mono PCM from `record`, `audio_session` configured for record+playback) behind the platform `SpeechVad` interface: Sherpa's VAD on native; the official Silero v6.2 model run directly on onnxruntime-web in the web realtime worker (§16.6). The interface is asynchronous because web VAD answers cross a worker boundary; the mic pipeline serialises windows so ordering is preserved on every platform.
+- State machine: `idle → (speech start) capturing → (~1000 ms continuous silence, constant `vadSilenceMs`) → Smart Turn judgement → finalising → sending → aiPlaying → idle`. When trailing silence is reached, Smart Turn judges the captured speech (up to the last 8 s): if it predicts the student has not finished, capture resumes and the judgement repeats at the next silence instead of sending a truncated turn. On native, Sherpa applies Smart Turn internally during endpointing; on web the model runs explicitly in the realtime worker.
 - Mic muted ⇒ VAD/capture pipeline stopped; muting mid-capture finalises the turn if any speech was captured, else discards it (FR-SE-04).
 - Empty turns (no frames / no speech energy) are discarded without an API call.
 
@@ -254,12 +254,19 @@ Encode failure → the turn is not sent; show a plain-language error and return 
 ## 8. AI Client, Context & Playback
 
 ### 8.1 Client
-`dart_openai` configured with the compile-time base URL constant `https://api.meta.ai/v1`, the `apiKey` from Settings, and the `model` stored on the current session (immutable after creation, §4.2). A session may also store a **reasoning effort** chosen in the New Session dialog (None/minimal/low/medium/high/xhigh, default Medium, immutable like the model); when set it is sent as the top-level `reasoning_effort` request parameter and shown as a reasoning-effort chip on Home session cards. Timeouts: connect 15 s, response 120 s (video turns are slow); one automatic retry on network error only (not on 4xx). Errors map to typed `AppError`s with plain-language user strings (FR flow F-09).
+`dart_openai` configured with the compile-time base URL constant `https://api.meta.ai/v1`, the `apiKey` from Settings, and the `model` stored on the current session (immutable after creation, §4.2). A session may also store a **reasoning effort** chosen in the New Session dialog (None/minimal/low/medium/high/xhigh, default Medium, immutable like the model); when set it is sent as the nested `reasoning: {effort: …}` request parameter and shown as a reasoning-effort chip on Home session cards. Timeouts: connect 60 s, response 180 s (video turns are slow); there is **no automatic retry** (`OpenAIRetryPolicy.none`) - a failed turn is surfaced and the student retries it. Errors map to typed `AppError`s with plain-language user strings (FR flow F-09).
 
 ### 8.2 Conversation context
 **Response parsing (before any playback):** (1) if the reply's entire text content, trimmed, is exactly `<[IGNORE_TURN]>` and there are no tool calls → silent-ignore path (§8.6); (2) else if the sentinel appears anywhere in a larger reply → invalid, nothing is spoken/drawn, raw reply logged; (3) else execute text + tool calls via the playback engine (§8.3). The sentinel is a plain-text protocol token, never a tool — it must cost nothing beyond those characters.
 
-Each request carries: system prompt (§8.4), prior AI replies for this session exactly as saved in the `messages` collection (text + tool calls), the AI element registry for the session (IDs + types + rects, §6.5 — so the model knows what it can point at/edit), and the current turn's MP4 as the new user message. Prior turn videos are not resent (cost/latency); the current board state is visible in the current turn's frames. Messages are loaded from the local DB (§10), so resuming a session continues the conversation with no extra context store.
+Each request carries the system prompt (§8.4) - which also gains the student's cross-session Memory, the last 3 sessions' Observations and this session's own Observation (§8.7) - plus this turn's uploads and the current turn's MP4 as the new user message. How the earlier conversation is supplied depends on the session's length:
+
+- **Within the video window (≤ 4 student video turns):** requests chain with `previous_response_id` (`store: true`); only the new turn is sent and the server reconstructs the stored conversation. The stored response id lives in each saved AI message's payload (`responseId`) and is read back from there on resume (`AiClient.latestResponseId`), so chaining survives app restarts.
+- **Past the video window:** Meta AI accepts at most 5 videos per request (observed error: "request contains 6 videos, exceeding the maximum of 5 allowed per request"), and a chained request keeps every video ever stored on the chain - so chaining can never drop one. Past the window, every turn therefore **breaks the chain** (`previous_response_id` omitted) and replays the local history from the `messages` collection: AI replies as saved (text + tool calls, each replayed `function_call` paired with its stored or synthesised `function_call_output`), student text turns as text, and student video turns split at the window - the **4 newest as `input_video`** (the current turn plus the three before it) and **every older one as its persisted transcript** (see below). The fresh response id is still saved with the AI message but is not chained from while the window is active. Messages are loaded from the local DB (§10), so resuming a session continues the conversation with no extra context store.
+
+**Turn-video transcription (`features/study_session/ai/video_transcription_prompt.dart`, `AiClient.transcribeVideo`, `SessionController._prepareTranscriptions`):** a student video turn's message payload gains `transcript`, `transcriptionStatus` (`none`/`pending`/`done`/`failed`), `transcriptionError` and `transcribedAt` alongside the local-only `videoBase64` (kept forever so the history sheet can replay the video; only the wire representation changes). Transcription is **transcribe-ahead**: when a turn is sent, the oldest video that turn still sends as video is transcribed in the background - a separate `AiClient`, one tool-less, non-stored (`store: false`) request carrying exactly that one video to the **same model**, in parallel with the tutor's reply - so its transcript is persisted before the next turn pushes it out of the window. Before a turn is sent, any turn it will already send as a transcript is awaited (normally joining the finished/in-flight ahead job); on resume, missing transcripts for all but the newest 3 video turns are re-driven oldest-first, one at a time. Status is persisted *before* the request, so an app kill mid-transcription resumes as `pending` and is retried; a failure marks the message `failed`, is logged, never fails the tutoring turn, and is retried on the next send - until then that one history item degrades to an explicit "transcript unavailable" marker rather than re-sending the video and breaking the limit. Whole-history saves are serialized (`SessionController._saveMessages`) because a background transcription and the tutor turn can persist at the same time.
+
+The transcription prompt demands a **self-contained record, not a summary**: the student's speech verbatim (with `[unclear: …]`/`[inaudible]`/`[illegible: …]` markers instead of guesses), every deictic reference resolved to the actual board content and approximate board coordinates it referred to ("from here to here" must name both ends), a chronological account of the board (starting state, everything written/drawn/erased/pointed at, ending state quoted exactly where legible), and the student's intent. The record must be returned inside exactly one ```` ```transcript ```` fenced block with nothing outside it; `AiClient.extractTranscript` stores only the block's content (discarding any stray preamble/sign-off), falling back to another fenced block, an unterminated `transcript` block, and finally the whole reply when the model ignores the format. The system prompt's *HISTORY - VIDEOS AND TRANSCRIPTS* section tells the tutor to treat transcripts as the student's own turn, to trust their resolved references, not to invent visual detail they don't state, and to treat their board state as a historical snapshot superseded by newer video.
 
 ### 8.3 Playback engine (the heart of the app)
 Input: ordered list of items — plain-text reply and/or tool calls (§6.1). Execution is a strictly sequential queue:
@@ -353,7 +360,7 @@ splitSpeech(text):
 ```
 
 - MVP implementation is intentionally naive (single regex pass, e.g. `(?<=[.!?])\s+`). Known imperfections — decimals ("3.14"), abbreviations ("e.g.") may split oddly; accepted for prototype, listed in §12 for hardening (protect decimals/abbreviations before splitting). Chunks MUST NOT be split further by length in MVP.
-- Each chunk is synthesised independently by Kokoro (`sherpa_onnx` offline TTS, §16.3) into float samples in memory, converted in memory to a complete 16-bit PCM WAV byte array (header + samples — no temp files), and played in order via `just_audio` (§16.4); synthesis of chunk *n+1* starts while chunk *n* plays (prefetch pipeline of depth exactly 1) to hide latency.
+- Each chunk is synthesised independently by the selected TTS engine (Kokoro or Piper, §16) into audio in memory, converted in memory to a complete 16-bit PCM WAV byte array (header + samples — no temp files), and played in order via `just_audio` (§16.4); synthesis of chunk *n+1* starts while chunk *n* plays (prefetch pipeline of depth exactly 1) to hide latency.
 - Playback of a multi-item AI turn (§8.3) awaits the final chunk of the current item before the next item.
 
 ### 9.2 Captions (FR-SP-03)
@@ -410,7 +417,6 @@ Stored **only** in platform secure storage (`flutter_secure_storage`, all suppor
 | # | Item | Trigger to build |
 |---|---|---|
 | D1 | AI output schema validation + auto-repair/retry loop (validate SVG/LaTeX/tool args, re-prompt on failure) | After MVP works end-to-end (per product decision); use logged raw responses as test corpus |
-| D2 | Smart Turn detection | Requires custom `sherpa-onnx` build; after VAD-only loop is validated |
 | D3 | Semantic registry for *student* elements ("the term you circled") — AI-created elements already have IDs in the MVP (§6.5) | When AI-element IDs + coordinates prove insufficient in tests |
 | D4 | Full-duplex echo handling beyond platform echo cancellation + §8.6 thresholds (e.g. learned AEC) | If speakerphone echo causes false barge-ins in testing |
 | D5 | Secure API-key storage (Keychain/Keystore) | Before any external distribution |
@@ -435,6 +441,8 @@ Every design question in this spec is already decided; this section does not reo
 4. **Save ordering:** kill the app (a) immediately after sending a turn, (b) immediately after receiving a reply; verify §10.5 — saved board + messages are intact on relaunch.
 5. **Barge-in (§8.6):** during playback, (a) a cough does not cancel the explanation and playback resumes from the interrupted chunk, (b) sustained speech stops TTS within 200 ms and is captured as the next turn, (c) side conversation answered with `<[IGNORE_TURN]>` resumes the suspended explanation.
 
+6. **Speech on web:** in Chrome (WebGPU) and Safari/Firefox (threaded-WASM fallback), verify VAD turn capture, Smart Turn judgement, Kokoro and Piper synthesis, barge-in during playback, and that the served headers yield `crossOriginIsolated === true` (§16.6).
+
 ## 15. Resolved Decisions (for the record)
 
 | Question | Decision |
@@ -444,116 +452,65 @@ Every design question in this spec is already decided; this section does not reo
 | Model selection | Chosen once per session at creation; immutable for the life of the session |
 | Board size | Fixed 1600×1200 logical units (landscape) |
 | App-killed mid-turn | No recovery flow; messages saved to the local DB as sent/received (§10.5) |
-| Turn detection | Silero VAD only; Smart Turn deferred (custom sherpa-onnx build) |
+| Turn detection | Silero VAD for speech/silence segmentation + Smart Turn for end-of-turn judgement (§7.1) |
 | AI speech interruption | Voice barge-in is in the MVP: suspend within 200 ms, false-trigger (<300 ms) resume from chunk start, real interruption becomes the next turn with interruption context; a `<[IGNORE_TURN]>` reply resumes a suspended explanation (§8.6) |
 | Unclear / irrelevant captured turns | Model judges every turn (§8.4 rule 4): clarify with pointing, brief redirect, prompt to continue, or the exact sentinel reply `<[IGNORE_TURN]>` — never guess an answer, and ignoring is never a tool call |
 
-## 16. On-Device Speech Models — Provisioning & sherpa-onnx Usage
+## 16. On-Device Speech Models — Provisioning & Engines
+
+Speech sits behind one Dart interface (`SpeechEngine` / `SpeechVad` in `features/study_session/speech/speech_engine.dart`, selected by conditional import) with two implementations:
+
+- **Native (Android/iOS/macOS):** `SherpaSpeech` — Sherpa-onnx for Silero VAD (+ Smart Turn inside Sherpa's endpointing) and for Kokoro/Piper TTS in a worker isolate.
+- **Web:** `WebSpeechEngine` — the first-party `texa-webspeech` JS workers (§16.6). Sherpa is not used on web: its web Kokoro can use neither WebGPU nor threaded WASM and is too slow. Web and native therefore use *different model files for the same models* (e.g. Kokoro below); behaviour, voices and chunking are kept identical at the interface level.
+
+One TTS engine (Kokoro or Piper, Settings choice) is alive at a time on every platform. Models are used strictly sequentially (VAD → Smart Turn → LLM → TTS), except that listening stays live during playback for barge-in (§8.6).
 
 ### 16.1 Sources (exact)
-The model files are **never bundled as Flutter assets** (the Kokoro archive alone is ~140 MB). They live in the repo at `app/models/` (with its `.gitignore`) and are downloaded by the app on first launch. Each URL is a **dart-define whose default value is the production URL**, so a plain build always talks to production:
+Model files are **never bundled as Flutter assets**. URLs are **dart-defines whose defaults are the production URLs** (`core/constants.dart` is the only place they are read), so a plain build always talks to production and the VS Code dev launch config points them at the local model server (`app/models/startserver.sh`, port 8765, serving `app/models/`):
 
-| Model | Dart-define | Production URL (the define's default) |
-|---|---|---|
-| Kokoro TTS (int8, multi-lang) | `KOKORO_MODEL_URL` | `https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_1.tar.bz2` |
-| Silero VAD | `SILERO_VAD_MODEL_URL` | `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx` |
-| Smart Turn v3.2 (int8) | `SMART_TURN_MODEL_URL` | `https://huggingface.co/soniqo/Smart-Turn-v3.2-ONNX/resolve/main/smart-turn-v3.2-int8.onnx` |
+| Model | Dart-define | Production default | Used by |
+|---|---|---|---|
+| Kokoro (Sherpa multi-lang, individual files) | `KOKORO_BASE_URL` | `https://huggingface.co/sitatech/kokoro-multi-lang-v1_0/resolve/main/` | Native Kokoro |
+| Kokoro 82M (kokoro-js repo layout) | `KOKORO_WEB_BASE_URL` | `https://huggingface.co/sitatech/Kokoro-82M-v1.0-ONNX/resolve/main/` | Web Kokoro only |
+| Piper `en_US-amy-medium` (individual files) | `PIPER_BASE_URL` | `https://huggingface.co/sitatech/vits-piper-en_US-amy-medium/resolve/main/` | Native Piper |
+| Silero VAD v6.2 (**official** model) | `SILERO_VAD_MODEL_URL` | `https://github.com/snakers4/silero-vad/raw/bfdc0193023f121ea5b3cc7b176dbed570a68a59/src/silero_vad/data/silero_vad.onnx` | All platforms (Sherpa accepts the official format) |
+| Smart Turn v3.2 (int8) | `SMART_TURN_MODEL_URL` | `https://huggingface.co/soniqo/Smart-Turn-v3.2-ONNX/resolve/main/smart-turn-v3.2-int8.onnx` | All platforms |
 
-```dart
-// core/constants.dart — the only place these are read
-const kokoroModelUrl = String.fromEnvironment(
-  'KOKORO_MODEL_URL',
-  defaultValue: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_1.tar.bz2',
-);
-const sileroVadModelUrl = String.fromEnvironment(
-  'SILERO_VAD_MODEL_URL',
-  defaultValue: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx',
-);
-const smartTurnModelUrl = String.fromEnvironment(
-  'SMART_TURN_MODEL_URL',
-  defaultValue: 'https://huggingface.co/soniqo/Smart-Turn-v3.2-ONNX/resolve/main/smart-turn-v3.2-int8.onnx',
-);
-```
-
-**Local development:** `app/models/` holds the three files in the repo. `app/startserver.sh` serves that folder over HTTP (`python3 -m http.server`, default port 8765, all interfaces, fails fast listing any missing file). The "App (dev debug)" configuration in `.vscode/launch.json` (repo root) passes `--dart-define=KOKORO_MODEL_URL=http://127.0.0.1:8765/kokoro-int8-multi-lang-v1_1.tar.bz2`, `--dart-define=SILERO_VAD_MODEL_URL=http://127.0.0.1:8765/silero_vad.onnx`, and `--dart-define=SMART_TURN_MODEL_URL=http://127.0.0.1:8765/smart-turn-v3.2-int8.onnx`, so development builds download from the local server. Workflow: run `./startserver.sh` from `app/`, then launch from VS Code. For a physical device, replace `127.0.0.1` in the defines with the dev machine's LAN address (the server binds all interfaces).
+Notes:
+- The web Kokoro repo is **separate** from the native one: the HF `Kokoro-82M-v1.0-ONNX` layout kokoro-js expects is not drop-in compatible with Sherpa (which requires its own metadata/voices packaging). For local development the same repo is mirrored under `sitatech/Kokoro-82M-v1.0-ONNX/` in the local models directory, and `KOKORO_WEB_BASE_URL` then ends at the repo root instead of `/resolve/main/`; both forms are supported.
+- Web Kokoro voice is `af_heart` (the equivalent of native speaker id 3). kokoro-js fetches that one small voice file (~500 KB) from HF itself; accepted, no local copy is provisioned.
+- WebGPU browser support (late 2026): Chrome/Edge, Safari 26+, Firefox on Windows/macOS. Everything else uses the threaded-WASM fallback (§16.6), which is why cross-origin isolation (below) matters most exactly on non-WebGPU browsers.
 
 ### 16.2 Provisioning flow (first launch)
-1. A dedicated `ModelProvisioningService` owns the model files and a `models.json` manifest recording, per model: resolved source URL, installed version/directory, and a `verified` flag. Storage goes through a `ModelStore` platform layer: real files under `<appSupportDirectory>/models/` on Android/iOS/macOS; on web — where `path_provider` has no app-support directory and throws — files persist in the browser Cache Storage and are copied into sherpa-onnx's WASM in-memory filesystem (`/texa-models/...`) when the store activates, so the engine receives the same style of paths on every platform.
-2. **All builds download** from the resolved dart-define URLs (§16.1) — production by default, the local `startserver.sh` server under the VS Code dev launch config. First launch shows one download screen with per-file and overall progress and a Retry action on failure. Models are required: the app does not enter Home until provisioning succeeds.
-3. The Kokoro `.tar.bz2` is extracted with the `archive` package (bzip2 + tar decode) into `models/kokoro-int8-multi-lang-v1_1/`; the extracted tree must contain `model.int8.onnx`, `voices.bin`, `tokens.txt`, `lexicon-us-en.txt`, and `espeak-ng-data/`. `silero_vad.onnx` and `smart-turn-v3.2-int8.onnx` are stored as single files.
-4. Verification before marking `verified`: Kokoro and Silero are actually initialised through sherpa-onnx (§16.3/§7.1) against the installed paths. Smart Turn is downloaded and stored but **not loaded in the MVP** (its use remains Deferred, D2 — it needs the custom sherpa-onnx build); verification for it is file-present and non-empty.
-5. Later launches skip provisioning when the manifest shows all models verified. Deleting app data re-runs the flow. Downloads are fully received and extracted before the `verified` manifest is written last, so a killed download never leaves a half-written model marked verified.
+1. A dedicated `ModelProvisioningService` owns the model files and a `models.json` manifest recording, per model: resolved source URL, installed location, and a `verified` flag. Storage goes through a `ModelStore` platform layer: real files under `<appSupportDirectory>/models/` on Android/iOS/macOS; in the browser Cache Storage on web.
+2. First launch shows one download screen with per-file and overall progress and a Retry action on failure. Models are required: the app does not enter Home until provisioning and engine initialisation succeed.
+3. **Native** downloads everything up front: the Kokoro and Piper file sets (base URL + file name), `silero_vad.onnx` and `smart-turn-v3.2-int8.onnx` as single files.
+4. **Web** downloads only Silero VAD and Smart Turn through Dart provisioning; their bytes are handed to the realtime worker. Web Kokoro/Piper models are downloaded and cached by their JS libraries on first TTS initialisation (§16.6), with progress reported into the same setup/settings progress UI (indeterminate where a library gives no totals). There is no Dart-side Kokoro/Piper download on web.
+5. Verification before marking `verified`: the VAD and the selected TTS engine are actually initialised against the installed files. Later launches skip provisioning when the manifest shows all models verified. The manifest is written last, so a killed download never leaves a half-written model marked verified.
 
-### 16.3 Kokoro TTS via sherpa-onnx (per `dart-api-examples/tts/bin/kokoro-en-lexicon.dart`)
-```dart
-await sherpa_onnx.initBindingsAsync(); // once at startup
-final config = sherpa_onnx.OfflineTtsConfig(
-  model: sherpa_onnx.OfflineTtsModelConfig(
-    kokoro: sherpa_onnx.OfflineTtsKokoroModelConfig(
-      model: '<models>/kokoro-int8-multi-lang-v1_1/model.int8.onnx',
-      voices: '<models>/kokoro-int8-multi-lang-v1_1/voices.bin',
-      tokens: '<models>/kokoro-int8-multi-lang-v1_1/tokens.txt',
-      lexicon: '<models>/kokoro-int8-multi-lang-v1_1/lexicon-us-en.txt',
-      dataDir: '<models>/kokoro-int8-multi-lang-v1_1/espeak-ng-data',
-    ),
-    numThreads: 1,
-    debug: false,
-  ),
-  maxNumSentences: 1, // Texa chunks sentences itself (§9); the engine must never re-split
-);
-final tts = sherpa_onnx.OfflineTts(config);
-final audio = tts.generateWithConfig(
-  text: chunk,
-  config: sherpa_onnx.OfflineTtsGenerationConfig(sid: kKokoroSpeakerId, speed: kKokoroSpeed, silenceScale: config.silenceScale),
-);
-// audio.samples (Float32) + audio.sampleRate -> in-memory WAV bytes (§16.4). tts.free() on dispose.
-```
-One `OfflineTts` instance is created after provisioning and kept for the app's lifetime (creation is expensive); synthesis calls are serialised through the chunk pipeline (§9).
+### 16.3 Native TTS via sherpa-onnx
+One Sherpa `OfflineTts` instance per selected engine is created after provisioning and kept for the app's lifetime in its worker isolate (creation is expensive; synthesis blocks). Kokoro uses speaker id 3, `maxNumSentences: 1` (Texa chunks sentences itself, §9 — the engine must never re-split). Switching engine in Settings downloads the new engine's files first if needed, then restarts TTS with it.
 
 ### 16.4 WAV playback via just_audio `StreamAudioSource`
-Kokoro output is played from memory — never via temp files — through a dedicated source class:
-```dart
-class WavStreamAudioSource extends StreamAudioSource {
-  WavStreamAudioSource(this.bytes);
-  final List<int> bytes; // a complete WAV file (header + 16-bit PCM)
-  @override
-  Future<StreamAudioResponse> request([int? start, int? end]) async {
-    start ??= 0;
-    end ??= bytes.length;
-    return StreamAudioResponse(
-      sourceLength: bytes.length,
-      contentLength: end - start,
-      offset: start,
-      stream: Stream.value(bytes.sublist(start, end)),
-      contentType: 'audio/wav', // WAV bytes — not the 'audio/mpeg' placeholder from generic examples
-    );
-  }
-}
-// per chunk: await player.setAudioSource(WavStreamAudioSource(wavBytes)); player.play();
-// chunk completion is observed on player.playerStateStream (ProcessingState.completed),
-// which advances the playback queue and updates captions (§9.2).
-```
-`StreamAudioSource` is served by just_audio through a localhost proxy, which is why the platform cleartext exceptions in §17 are scoped to localhost only.
+All engines deliver complete 16-bit PCM WAV byte arrays (header + samples, built in memory — never temp files), played through the `WavStreamAudioSource` playback pipeline (§9): per chunk, `setAudioSource` → `play()` → completion observed on `playerStateStream` (`ProcessingState.completed`), which advances the queue and captions. `StreamAudioSource` is served by just_audio through a localhost proxy, which is why the platform cleartext exceptions in §17 are scoped to localhost only.
 
-### 16.5 Silero VAD via sherpa-onnx (per `dart-api-examples/vad/bin/vad.dart`)
-```dart
-final vad = sherpa_onnx.VoiceActivityDetector(
-  config: sherpa_onnx.VadModelConfig(
-    sileroVad: sherpa_onnx.SileroVadModelConfig(
-      model: '<models>/silero_vad.onnx',
-      minSilenceDuration: 1.0, // = kVadSilence (turn finalisation, §7.1)
-      minSpeechDuration: 0.3,  // = barge-in sustained-speech threshold (§8.6)
-    ),
-    numThreads: 1,
-    debug: false,
-  ),
-  bufferSizeInSeconds: 10,
-);
-// mic PCM16 (16 kHz mono) -> Float32 samples in [-1, 1] -> fed in windowSize-sample windows:
-vad.acceptWaveform(Float32List.sublistView(samples, start, start + vadConfig.sileroVad.windowSize));
-// vad.isDetected() marks speech activity; segments are drained with vad.front()/vad.pop(); vad.flush() at turn end; vad.free() on dispose.
-```
-The same mic PCM stream feeds three consumers: VAD, the turn recorder's 1-second audio chunks (§7.3), and nothing else. Sample format conversion (PCM16 LE → Float32) happens once, in the audio input layer.
+### 16.5 Native VAD via sherpa-onnx
+Sherpa's `VoiceActivityDetector` runs Silero with Smart Turn configured for endpointing (`minSilenceDuration = vadSilenceMs`, `minSpeechDuration = sustainedSpeechMs`); mic PCM16 (16 kHz mono) is converted once to Float32 and fed in VAD windows. At the `SpeechVad` interface level this reports "turn complete" unconditionally — Sherpa has already applied Smart Turn internally, unlike web where the judgement is explicit (§7.1).
+
+### 16.6 Web speech — `texa-webspeech` (npm package, `app/web/texa-webspeech/`)
+A first-party npm package, bundled with esbuild into two dedicated workers written to `app/web/` (`npm run build` there; the outputs are build artefacts of the package, not hand-written files):
+
+- **`speech_worker.js` (realtime):** Silero VAD + Smart Turn on a shared onnxruntime-web instance. Silero runs the **official v6.2 model directly** (512-sample windows with context/state — no audio preprocessing beyond PCM16→Float32); Smart Turn consumes the raw waveform (feature extraction is baked into its ONNX graph). Deliberately no Transformers.js pipeline or Smart Turn JS library — raw ONNX keeps this worker small and predictable.
+- **`speech_tts_worker.js` (TTS):** Kokoro via `kokoro-js`, or Piper via `@mintplex-labs/piper-tts-web` (which self-provisions its voice into OPFS on first use; its phonemizer/ORT files download from its CDN defaults unless local paths are supplied). Only one engine is loaded at a time.
+
+Two workers (not one) because barge-in requires VAD/Smart Turn to stay responsive while TTS is generating; a single worker would also force realtime and TTS to share one WASM heap. Sequential model use means the split costs no duplicated model memory in practice.
+
+Key decisions and requirements:
+- **Shared runtime:** Transformers.js is pinned to **4.3.2** and forced into kokoro-js via an npm `overrides` entry (verified compatible), so the whole web speech stack uses **one** onnxruntime-web copy; its WASM binaries are served same-origin from `app/web/ort-wasm/`.
+- **Kokoro precision/device:** `fp32` only (q8 measured slower). Device selection probes for a working WebGPU adapter *before* any download, falls back to WASM, and keeps a try/catch around session creation; the chosen device is logged and reported to Dart. On WASM, thread count follows `crossOriginIsolated` (below).
+- **Cross-origin isolation is required for threaded WASM:** the app origin must be served with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` (§17). `credentialess` is **not** an acceptable substitute: Safari does not support it, which would silently drop exactly the non-WebGPU browsers to single-threaded WASM. HF downloads are unaffected by `require-corp` — all model traffic is CORS `fetch()` (HF serves `Access-Control-Allow-Origin`), and COEP only blocks no-cors subresources. Without isolation the app still works, single-threaded.
+- **Warmup:** after TTS init, the engine fire-and-forgets a discarded `"a"` synthesis so first-utterance latency (WebGPU shader compilation / runtime warm-up) is paid up front; `synthesise` internally awaits that warmup only while it is still running, so an immediate session start is correct without blocking init. Concurrent `initTts` calls are deduplicated for the same reason.
+- **Production size:** since web no longer uses Sherpa, `assets/packages/sherpa_onnx_web/` can be deleted from `build/web/` after `flutter build web` (see the package README).
 
 ## 17. Platform Setup Requirements (implementation checklist — not yet applied)
 
@@ -569,7 +526,7 @@ The packages are in `pubspec.yaml` but their platform configuration has **not** 
 - `NSAppTransportSecurity` → `NSAllowsLocalNetworking: true` (localhost exception for the just_audio proxy; no arbitrary loads).
 - Podfile `post_install`: add `AUDIO_SESSION_MICROPHONE=1` to `GCC_PREPROCESSOR_DEFINITIONS` (required by `audio_session` 0.2.x for microphone APIs).
 
-**Web:** no native platform files; the browser build must compile and serve for this version. Browser microphone access requires a secure context (HTTPS/localhost) and a user-granted browser mic permission in addition to the in-app flow.
+**Web:** no native platform files; the browser build must compile and serve for this version. Browser microphone access requires a secure context (HTTPS/localhost) and a user-granted browser mic permission in addition to the in-app flow. The production host MUST serve the app with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` (cross-origin isolation → threaded WASM for the web speech workers, §16.6; `credentialess` is not a substitute — Safari ignores it). The `texa-webspeech` workers and `ort-wasm/` binaries are plain static files next to the Flutter web output.
 
 **Windows:** planned, not in this version. No Windows platform setup, entitlements, or verification is specified or required until the Windows support milestone; do not treat the existing `windows/` scaffold as a support commitment.
 

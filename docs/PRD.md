@@ -4,8 +4,8 @@
 |---|---|
 | Product | Texa — AI STEM Tutor |
 | Tagline | The personal AI tutor for everyone |
-| Document version | 1.6 |
-| Version history | v1.1: fixed Meta AI base URL, per-session immutable model, confirmed 1600×1200 landscape board, no mid-turn recovery. v1.2: voice barge-in, natural turn judgement, whiteboard etiquette. v1.3: `<[IGNORE_TURN]>` sentinel (not a tool), AI element identifiers + edit/remove of own elements, first-launch model downloads, platform-setup requirements, slang (English-only) and code-quality standards (Tech Specs §16–§19). v1.4: corrected Kokoro model to v1_1, supported platforms are Android/iOS/macOS/Web with Windows planned. v1.6 (27 Oct 2026): file uploads (modal picker with preview grid), attempt-first pedagogy, per-session Session Observation, cross-session student Memory and observation search. v1.8 (28 Oct 2026): mark_landmarks tool (model supplies landmark names only, app computes coordinates), optional per-session reasoning effort at creation, landscape eraser/line-tool fixes. v1.7 (28 Oct 2026): landscape 1600×1200 board, custom high-performance board engine, API key in secure storage, tostore table engine for collections, subject selector removed, no text composer (voice + drawing + file uploads only), single pen-colour picker. v1.5 (27 Oct 2026): model files moved out of Flutter assets to `app/models/` and served in development by `app/startserver.sh`; model URLs are dart-defines defaulting to the production URLs, set for local development in `.vscode/launch.json` |
+| Document version | 1.9 |
+| Version history | v1.1: fixed Meta AI base URL, per-session immutable model, confirmed 1600×1200 landscape board, no mid-turn recovery. v1.2: voice barge-in, natural turn judgement, whiteboard etiquette. v1.3: `<[IGNORE_TURN]>` sentinel (not a tool), AI element identifiers + edit/remove of own elements, first-launch model downloads, platform-setup requirements, slang (English-only) and code-quality standards (Tech Specs §16–§19). v1.4: corrected Kokoro model to v1_1, supported platforms are Android/iOS/macOS/Web with Windows planned. v1.6 (27 Oct 2026): file uploads (modal picker with preview grid), attempt-first pedagogy, per-session Session Observation, cross-session student Memory and observation search. v1.8 (28 Oct 2026): mark_landmarks tool (model supplies landmark names only, app computes coordinates), optional per-session reasoning effort at creation, landscape eraser/line-tool fixes. v1.7 (28 Oct 2026): landscape 1600×1200 board, custom high-performance board engine, API key in secure storage, tostore table engine for collections, subject selector removed, no text composer (voice + drawing + file uploads only), single pen-colour picker. v1.5 (27 Oct 2026): model files moved out of Flutter assets to `app/models/` and served in development by `app/startserver.sh`; model URLs are dart-defines defaulting to the production URLs, set for local development in `.vscode/launch.json`. v1.9 (2 Nov 2026): long sessions past Meta AI's 5-videos-per-request limit - only the 4 newest student turns are sent as video, older turns are transcribed in the background (same model, in parallel with the tutor's reply) and sent as persisted transcripts |
 | Status | Draft for prototype (MVP) |
 | Date | 27 October 2026 |
 | Platform | Flutter — Android, iOS, macOS, and Web (mobile is the primary target). Windows is planned but not a supported/tested platform in this version |
@@ -45,7 +45,6 @@ A patient, perceptive personal tutor that works *with* the student on a shared b
 - No parent/teacher dashboards, payments, or subscriptions.
 - No handwriting recognition/OCR as a separate pipeline (the multimodal model interprets the board video directly).
 - No complex AI-output schema validation/repair pipeline (see §13 — explicitly deferred; noted here so it is not lost).
-- No Smart Turn detection (deferred — requires a custom `sherpa-onnx` build; VAD only for the prototype).
 - No multi-student / collaborative sessions.
 
 ## 4. Target Users & Personas
@@ -74,7 +73,7 @@ Prototype assumption: the person configuring the API key may be a parent/older s
 - Model selection per session at creation time; a session's model cannot be changed afterwards.
 - Home/dashboard: session history, resume a session, create a new session, rename/delete sessions.
 - Session screen: unified whiteboard (fixed logical size), pen/eraser/undo/redo, voice turn capture (VAD), AI replies as plain text (spoken) and/or board tool actions (SVG, LaTeX, text, function plots, pointers/highlights, viewport focus).
-- On-device VAD (Silero via `sherpa-onnx`) and TTS (Kokoro via `sherpa-onnx`), sentence-chunked speech, optional live captions of the chunk currently playing. Speech models are downloaded on first launch from URLs supplied via dart-defines defaulting to the production URLs (a local model server overrides them in development — Tech Specs §16).
+- On-device speech behind one interface: Silero VAD + Smart Turn end-of-turn detection, and Kokoro or Piper TTS (one engine at a time), sentence-chunked with optional live captions of the chunk currently playing. Native uses `sherpa-onnx`; web uses the first-party `texa-webspeech` workers (Sherpa's web Kokoro has no WebGPU/threaded-WASM path and is too slow). Speech models are downloaded on first launch from URLs supplied via dart-defines defaulting to the production URLs (a local model server overrides them in development — Tech Specs §16).
 - Session overlays: mic mute/unmute, captions on/off, fullscreen enter/exit; collapsed under a **More** button on mobile.
 - Landscape-locked session screen; local persistence of sessions and board state (`tostore`).
 - Settings: API key, captions default, clear-all-data.
@@ -82,7 +81,6 @@ Prototype assumption: the person configuring the API key may be a parent/older s
 ### 6.2 Deferred / Future (explicit backlog, not MVP)
 | Item | Why deferred |
 |---|---|
-| Smart Turn end-of-turn detection | Requires a custom `sherpa-onnx` build |
 | AI output schema validation, auto-repair & retry loop | "Make it work first, then harden" — see Tech Specs §12 |
 | Semantic element registry (stable IDs/bounding boxes so the AI can reference "the denominator you circled") | MVP uses board coordinates |
 | Secure credential storage (Keychain/Keystore) replacing plain local storage | Prototype only |
@@ -117,7 +115,7 @@ App
 1. App opens to a short welcome explaining Texa in one screen ("Your AI tutor that draws with you").
 2. User enters their API key. The base URL is fixed at `https://api.meta.ai/v1` and is never asked for. A **Test connection** action confirms the key works before proceeding; failure shows a plain-language error with retry.
 3. App requests microphone permission, explaining it is used so the student can talk while drawing. Denial does not block entry — the app continues with mic disabled and explains voice is off (see F-09).
-4. On-device speech models are provisioned (Tech Specs §16): downloaded on first launch from the dart-define model URLs (production URLs by default; the local `startserver.sh` server in development); setup does not complete until Kokoro and Silero VAD initialise successfully.
+4. On-device speech models are provisioned (Tech Specs §16): downloaded on first launch from the dart-define model URLs (production URLs by default; the local `startserver.sh` server in development); setup does not complete until the selected TTS engine and Silero VAD initialise successfully.
 5. User lands on Home. **Success:** user reaches Home with a working configuration.
 
 ### F-02 — Home / dashboard
@@ -184,7 +182,7 @@ App
 | Mic picks up noise / side conversation | AI stays silent (no speech, no drawing) and keeps listening; a suspended explanation resumes (F-06b) |
 | AI cannot understand the student | AI asks a specific clarifying question, pointing at candidate areas; it does not guess an answer (F-06b) |
 | App backgrounded/killed | No special recovery flow in this version. Messages are saved to the local DB as they are sent and received, and board state is autosaved, so history and board are intact on relaunch |
-| Very long session | Board/history remain performant; oldest turn media pruned per retention policy (FR-DA-03) |
+| Very long session | Board/history remain performant. Past 4 student video turns, older turns are sent to the tutor as transcripts instead of video (Meta AI allows at most 5 videos per request; Texa keeps a one-slot margin), so a session is never cut short by the video limit. Turn videos themselves are kept locally for history playback |
 
 
 ### F-10 — Uploading files to a session
@@ -232,7 +230,7 @@ Format: **ID — Requirement** *(acceptance criteria in italics)*.
 - **FR-WB-05** — The session screen shall be locked to **landscape** orientation.
 
 ### 9.4 Student Turn Capture
-- **FR-ST-01** — While unmuted, on-device VAD (Silero) shall detect speech start/end; a turn finalises after ~1s of trailing silence (configurable constant).
+- **FR-ST-01** — While unmuted, on-device VAD (Silero) shall detect speech start/end; after ~1s of trailing silence (configurable constant), Smart Turn shall judge whether the student has finished before the turn finalises — an unfinished judgement resumes listening instead of sending a truncated turn.
 - **FR-ST-02** — During a turn, the app shall capture board frames at **1 FPS** and synchronised mic audio, encoded into a lightweight video turn payload (Tech Specs §7).
 - **FR-ST-03** — Turn state (listening / capturing / sending / thinking) shall always be visible via a subtle status affordance without covering the board.
 - **FR-ST-04** — If the mic is muted, no capture shall occur and the muted state shall be unmistakable.
@@ -280,7 +278,7 @@ Format: **ID — Requirement** *(acceptance criteria in italics)*.
 ### 9.8 Data
 - **FR-DA-01** — Sessions (including their fixed model), board state, messages, observations and settings shall persist in the on-device `tostore` database (table engine with indexes, Tech Specs §10) only; the API key shall persist only in platform secure storage.
 - **FR-DA-02** — No student work shall be lost on app kill, crash, or leaving a session (continuous autosave).
-- **FR-DA-03** — Each message shall be saved to the local DB as it is sent (student turn) and as it is received (AI reply, before playback). Captured turn video files are deleted after the turn completes; board state and saved messages persist.
+- **FR-DA-03** — Each message shall be saved to the local DB as it is sent (student turn) and as it is received (AI reply, before playback). Captured turn video files are deleted after the turn completes; board state and saved messages persist. A student turn's video bytes are kept in its saved message for local history playback, together with - once produced - its transcript and transcription status; only the newest 4 turns' videos are ever sent to the API, older turns being sent as their transcripts, so resuming a session restores the same video/transcript split (any transcription interrupted by an app kill is resumed automatically).
 
 ## 10. UX & Visual Design Requirements
 
@@ -336,7 +334,7 @@ Format: **ID — Requirement** *(acceptance criteria in italics)*.
 
 | Milestone | Contents |
 |---|---|
-| M0 — Foundations | sherpa-onnx VAD+Kokoro verified on target devices; canvas bake-in of SVG/LaTeX verified (Tech Specs §14 checks) |
+| M0 — Foundations | speech (VAD+Kokoro: sherpa-onnx native, texa-webspeech web) verified on target devices; canvas bake-in of SVG/LaTeX verified (Tech Specs §14 checks) |
 | M1 — Board & Home | Home/session CRUD, fixed board, drawing tools, autosave/resume, overlays + More, landscape lock, fullscreen |
 | M2 — Student Turn | Mic capture, Silero VAD turn finalisation, 1 FPS video encoding, send turn |
 | M3 — AI Turn | Tool-call handling, SVG/LaTeX/plot rendering, playback timeline, camera framing, chunked TTS + captions |
