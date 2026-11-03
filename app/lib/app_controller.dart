@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import 'core/data/db.dart';
 import 'core/data/models.dart';
+import 'features/study_session/board/board_models.dart';
 import 'features/study_session/speech/model_provisioning.dart';
 import 'features/study_session/speech/speech_engine.dart';
 
@@ -13,6 +14,13 @@ class AppController extends ChangeNotifier {
   final SpeechEngine speech = createSpeechEngine();
   AppSettings settings = const AppSettings();
   List<Session> sessions = [];
+
+  /// The last persisted board of each session, keyed by session id.
+  /// The home list renders its board previews from these snapshots,
+  /// so a preview always shows the board exactly as it was left -
+  /// never a stale raster thumbnail captured mid-session.
+  Map<String, BoardSnapshot> boardPreviews = {};
+
   bool speechReady = false;
   String memoryText = '';
 
@@ -20,6 +28,7 @@ class AppController extends ChangeNotifier {
     settings = await db.loadSettings();
     memoryText = await db.loadMemory();
     sessions = await db.loadSessions();
+    await _loadBoardPreviews();
     await tryInitSpeech();
   }
 
@@ -96,23 +105,47 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Claims the one-time Home welcome dialog as seen, persisting the
+  /// claim so it is never presented again.
+  Future<void> markHomeWelcomeSeen() async {
+    if (settings.homeWelcomeSeen) return;
+    await saveSettings(settings.copyWith(homeWelcomeSeen: true));
+  }
+
   Future<void> refreshSessions() async {
     sessions = await db.loadSessions();
+    await _loadBoardPreviews();
     notifyListeners();
   }
 
-  Future<Session> createSession(String model, {String? reasoningEffort}) async {
+  Future<void> _loadBoardPreviews() async {
+    final previews = <String, BoardSnapshot>{};
+    for (final s in sessions) {
+      final raw = await db.loadBoard(s.id);
+      if (raw != null) previews[s.id] = BoardSnapshot.decode(raw);
+    }
+    boardPreviews = previews;
+  }
+
+  Future<Session> createSession(
+    String model, {
+    String? title,
+    String? reasoningEffort,
+  }) async {
     final now = DateTime.now();
+    final trimmedTitle = title?.trim();
     final session = Session(
       id: newId(),
-      title:
-          'Session · ${now.day}/${now.month}, ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}',
+      title: trimmedTitle == null || trimmedTitle.isEmpty
+          ? defaultSessionTitle(now)
+          : trimmedTitle,
       model: model,
       reasoningEffort: reasoningEffort,
       createdAt: now,
       updatedAt: now,
     );
     sessions = [session, ...sessions];
+    boardPreviews[session.id] = BoardSnapshot.empty();
     await db.saveSessions(sessions);
     notifyListeners();
     return session;
@@ -128,6 +161,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> deleteSession(Session s) async {
     sessions = sessions.where((e) => e.id != s.id).toList();
+    boardPreviews.remove(s.id);
     await db.deleteSession(s.id);
     notifyListeners();
   }
@@ -136,6 +170,7 @@ class AppController extends ChangeNotifier {
     await db.wipeAll();
     settings = const AppSettings();
     sessions = [];
+    boardPreviews = {};
     notifyListeners();
   }
 }

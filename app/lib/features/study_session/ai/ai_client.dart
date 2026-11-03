@@ -63,15 +63,16 @@ class AiToolResult {
 
 /// Performs one tool call the model asked for and reports its outcome.
 /// Supplied by the session controller, which owns the board/playback the
-/// tools act on; [AiClient] awaits it inside the agentic loop before the
-/// result is sent back to the model.
+/// tools act on; [AiClient] awaits it after a response completes so the
+/// outcome can be persisted with the turn. The outcome is only sent
+/// back to the model when a call in the round failed (see [AiClient.streamTurn]).
 typedef AiToolExecutor = Future<AiToolResult> Function(
   String name,
   Map<String, dynamic> args,
 );
 
-/// Internal terminal event of one streamed response inside the agentic
-/// loop; never leaves [AiClient.streamTurn].
+/// Internal terminal event of one streamed response; never leaves
+/// [AiClient.streamTurn].
 class _ResponseRound extends AiEvent {
   _ResponseRound({
     required this.responseId,
@@ -153,6 +154,23 @@ class AiUpload {
   }
 
   String get dataUri => 'data:$mimeType;base64,$base64';
+
+  /// Persisted shape, stored in the student message payload so the
+  /// files a turn carried stay visible (attachments modal, history)
+  /// and can be rebuilt if that turn is ever replayed.
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    'mimeType': mimeType,
+    if (base64 != null) 'base64': base64,
+    if (text != null) 'text': text,
+  };
+
+  factory AiUpload.fromJson(Map<String, dynamic> json) => AiUpload(
+    name: json['name'] as String? ?? '',
+    mimeType: json['mimeType'] as String? ?? 'application/octet-stream',
+    base64: json['base64'] as String?,
+    text: json['text'] as String?,
+  );
 }
 
 /// Direct streaming client to the fixed Meta AI endpoint, backed by the
@@ -195,6 +213,43 @@ class AiClient {
         : null;
   }
 
+  /// Uploads persisted with a saved student turn (see
+  /// [AiUpload.toJson]), oldest first; empty for turns sent without
+  /// attachments or saved before uploads were persisted.
+  static List<AiUpload> uploadsOf(ChatMessage message) {
+    final uploads = message.payload['uploads'];
+    if (uploads is! List) return const [];
+    return [
+      for (final upload in uploads)
+        if (upload is Map) AiUpload.fromJson(upload.cast<String, dynamic>()),
+    ];
+  }
+
+  /// Extracts the transcript from a transcription model's raw reply.
+  ///
+  /// The prompt asks for exactly one ```` ```transcript ```` fenced
+  /// block and nothing else, so the block's content is the transcript
+  /// and anything around it (a stray "Here is the transcription…", a
+  /// sign-off) is discarded. Fallbacks, in order: a closed fenced
+  /// block with another (or no) tag, an unterminated `transcript`
+  /// block (take everything after its opening fence), and finally the
+  /// whole reply trimmed - a model that ignored the format still
+  /// yields its record instead of failing the transcription.
+  static String extractTranscript(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return '';
+    final tagged = RegExp(
+      r'```transcript[^\S\r\n]*\r?\n([\s\S]*?)(?:\r?\n```|\s*$)',
+    ).firstMatch(text);
+    final taggedText = tagged?.group(1)?.trim();
+    if (taggedText != null && taggedText.isNotEmpty) return taggedText;
+    final fenced = RegExp(r'```[A-Za-z0-9_-]*[^\S\r\n]*\r?\n([\s\S]*?)\r?\n```')
+        .firstMatch(text);
+    final fencedText = fenced?.group(1)?.trim();
+    if (fencedText != null && fencedText.isNotEmpty) return fencedText;
+    return text;
+  }
+
   /// Transcribes one student turn-video with [model] into the
   /// self-contained written record described by
   /// [kVideoTranscriptionPrompt]. A single, tool-less, non-stored
@@ -231,16 +286,16 @@ class AiClient {
     if (_closed) {
       throw const AppError('Transcription was cancelled.');
     }
-    final text = completed?.text.trim() ?? '';
+    final text = extractTranscript(completed?.text ?? '');
     if (text.isEmpty) {
       throw const AppError('Transcription returned an empty record.');
     }
     return text;
   }
 
-  /// Set by [close]. A closed client must never start another round of
-  /// the agentic loop: after an interrupt the tool outputs of the round
-  /// that was in flight are stale and must not be sent to the model.
+  /// Set by [close]. A closed client must never start another request:
+  /// after an interrupt the tool outputs of the round that was in
+  /// flight are stale and must not be sent to the model.
   bool _closed = false;
 
   /// Completed by [close] so a stream blocked waiting for the model's
@@ -343,6 +398,24 @@ class AiClient {
     return null;
   }
 
+  /// Whether the AI message owning the latest stored response id left
+  /// tool calls whose outputs were never sent back to the model (the
+  /// normal end of a turn now: successful results are persisted, not
+  /// returned). Chaining onto such a response would continue a stored
+  /// conversation whose function calls have no outputs, so the next
+  /// turn must replay the local history instead - which answers every
+  /// call with its persisted `function_call_output`.
+  static bool latestResponseHasPendingToolOutputs(List<ChatMessage> history) {
+    for (final m in history.reversed) {
+      if (m.role != 'ai') continue;
+      final id = m.payload['responseId'];
+      if (id is String && id.isNotEmpty) {
+        return m.payload['toolOutputsPending'] == true;
+      }
+    }
+    return false;
+  }
+
   /// Minimal authenticated request used by Test connection.
   Future<void> testConnection() async {
     try {
@@ -372,6 +445,42 @@ class AiClient {
         cause: e,
       );
     }
+  }
+
+  /// Media parts for [uploads] (image/video/audio/document), in order.
+  List<Map<String, dynamic>> _uploadMediaParts(List<AiUpload> uploads) => [
+    for (final u in uploads.where((u) => u.hasBase64 && !u.hasText))
+      switch (u.kind) {
+        AiUploadKind.image => {'type': 'input_image', 'image_url': u.dataUri},
+        AiUploadKind.video => {'type': 'input_video', 'video_url': u.dataUri},
+        AiUploadKind.audio => {
+          'type': 'input_audio',
+          'input_audio': {'data': u.base64, 'format': u.audioFormat},
+        },
+        AiUploadKind.document => {
+          'type': 'input_file',
+          'filename': u.name,
+          'file_data': u.dataUri,
+        },
+      },
+  ];
+
+  /// Text context for [uploads]: text-like files inlined, byte-less
+  /// files mentioned by name. Empty when every upload is a media part.
+  String _uploadTextContext(List<AiUpload> uploads) {
+    final buffer = StringBuffer();
+    for (final u in uploads) {
+      if (u.hasText) {
+        buffer.write(
+          '\nThe student uploaded a file named ${u.name}:\n${u.text}',
+        );
+      } else if (!u.hasBase64) {
+        buffer.write(
+          '\nThe student attached a file named ${u.name} (${u.mimeType}).',
+        );
+      }
+    }
+    return buffer.toString();
   }
 
   /// Builds the Responses API request payload for one turn: the system
@@ -454,12 +563,24 @@ class AiClient {
       for (var i = 0; i < history.length; i++)
         if (i != currentIndex && isStudentVideoTurn(history[i])) i,
     ];
-    final retainedVideoIndices = retainedVideoBudget <= 0
+    // Uploaded videos replayed with earlier turns (below) are videos
+    // in this request too, so they spend the same budget.
+    final historicalUploadVideos = includeHistory
+        ? earlierVideoIndices
+              .expand((i) => uploadsOf(history[i]))
+              .where(
+                (u) =>
+                    u.hasBase64 && !u.hasText && u.kind == AiUploadKind.video,
+              )
+              .length
+        : 0;
+    final boardVideoBudget = retainedVideoBudget - historicalUploadVideos;
+    final retainedVideoIndices = boardVideoBudget <= 0
         ? const <int>{}
         : earlierVideoIndices
               .skip(
-                earlierVideoIndices.length > retainedVideoBudget
-                    ? earlierVideoIndices.length - retainedVideoBudget
+                earlierVideoIndices.length > boardVideoBudget
+                    ? earlierVideoIndices.length - boardVideoBudget
                     : 0,
               )
               .toSet();
@@ -516,10 +637,19 @@ class AiClient {
           }
         } else if (isStudentVideoTurn(m)) {
           final video = m.payload['videoBase64'] as String;
+          // Files this turn carried are replayed with it: the model
+          // is stateless, so a replayed turn without its attachments
+          // is a turn it never saw the files in.
+          final turnUploads = uploadsOf(m);
+          final uploadText = _uploadTextContext(turnUploads).trim();
+          final uploadParts = _uploadMediaParts(turnUploads);
           if (retainedVideoIndices.contains(index)) {
             input.add({
               'role': 'user',
               'content': [
+                if (uploadText.isNotEmpty)
+                  {'type': 'input_text', 'text': uploadText},
+                ...uploadParts,
                 {
                   'type': 'input_video',
                   'video_url': 'data:video/mp4;base64,$video',
@@ -539,15 +669,33 @@ class AiClient {
               'content': [
                 {
                   'type': 'input_text',
-                  'text': transcript != null
-                      ? '[Transcript of an earlier student turn - originally a board-and-voice video, transcribed because only the newest turns are sent as video. The quoted words are the student\'s own; the surrounding descriptions record what was on the board and what the student pointed at or did.]\n$transcript'
-                      : '[An earlier student turn was given as a board-and-voice video. Its transcript is unavailable, so its exact content could not be included here. Rely on the surrounding conversation and the current board, and ask the student if that turn matters.]',
+                  'text':
+                      (transcript != null
+                          ? '[Transcript of an earlier student turn - originally a board-and-voice video, transcribed because only the newest turns are sent as video. The quoted words are the student\'s own; the surrounding descriptions record what was on the board and what the student pointed at or did.]\n$transcript'
+                          : '[An earlier student turn was given as a board-and-voice video. Its transcript is unavailable, so its exact content could not be included here. Rely on the surrounding conversation and the current board, and ask the student if that turn matters.]') +
+                      (uploadText.isEmpty ? '' : '\n$uploadText'),
                 },
+                ...uploadParts,
               ],
             });
           }
-        } else if ((m.payload['text'] as String?)?.isNotEmpty == true) {
-          input.add({'role': 'user', 'content': m.payload['text'] as String});
+        } else if ((m.payload['text'] as String?)?.isNotEmpty == true ||
+            uploadsOf(m).isNotEmpty) {
+          final text = (m.payload['text'] as String? ?? '').trim();
+          final turnUploads = uploadsOf(m);
+          if (turnUploads.isEmpty) {
+            input.add({'role': 'user', 'content': text});
+          } else {
+            final combined = (text + _uploadTextContext(turnUploads)).trim();
+            input.add({
+              'role': 'user',
+              'content': [
+                if (combined.isNotEmpty)
+                  {'type': 'input_text', 'text': combined},
+                ..._uploadMediaParts(turnUploads),
+              ],
+            });
+          }
         }
       }
     }
@@ -561,17 +709,7 @@ class AiClient {
     if (extraContext != null && extraContext.isNotEmpty) {
       context.write(' $extraContext');
     }
-    for (final u in uploads) {
-      if (u.hasText) {
-        context.write(
-          '\nThe student uploaded a file named ${u.name}:\n${u.text}',
-        );
-      } else if (!u.hasBase64) {
-        context.write(
-          '\nThe student attached a file named ${u.name} (${u.mimeType}).',
-        );
-      }
-    }
+    context.write(_uploadTextContext(uploads));
 
     final parts = <Map<String, dynamic>>[
       // Inputs of earlier turns that were cancelled before the model
@@ -583,25 +721,7 @@ class AiClient {
       if (context.isNotEmpty)
         {'type': 'input_text', 'text': context.toString()},
     ];
-    for (final u in uploads.where((u) => u.hasBase64 && !u.hasText)) {
-      switch (u.kind) {
-        case AiUploadKind.image:
-          parts.add({'type': 'input_image', 'image_url': u.dataUri});
-        case AiUploadKind.video:
-          parts.add({'type': 'input_video', 'video_url': u.dataUri});
-        case AiUploadKind.audio:
-          parts.add({
-            'type': 'input_audio',
-            'input_audio': {'data': u.base64, 'format': u.audioFormat},
-          });
-        case AiUploadKind.document:
-          parts.add({
-            'type': 'input_file',
-            'filename': u.name,
-            'file_data': u.dataUri,
-          });
-      }
-    }
+    parts.addAll(_uploadMediaParts(uploads));
     // The board turn-video is a video, not an image.
     parts.add({
       'type': 'input_video',
@@ -611,10 +731,18 @@ class AiClient {
     return (instructions: instructions.toString(), input: input);
   }
 
-  /// Streams one turn, running the agentic tool loop when
-  /// [executeToolCall] is given.
+  /// Streams one turn.
   ///
-  /// Every tutor request is sent with `store: true`. When a previous
+  /// Tutor requests are sent with `store: true` while the stored
+  /// chain is in use, so the next turn can chain onto them. Once the
+  /// session is past the video window ([maxVideoTurnsPerRequest]) the
+  /// chain is abandoned for good - every later turn replays the local
+  /// history instead - so those requests are sent with `store: false`:
+  /// nothing will ever chain onto them, and their (non-stored)
+  /// response ids are not persisted. A failure follow-up inside such
+  /// a turn therefore cannot chain either; it resends the turn's
+  /// input together with the `function_call`/`function_call_output`
+  /// items, self-contained. When a previous
   /// stored response is known (passed explicitly or found in the saved
   /// AI messages in [history]) only this turn's new input plus
   /// `previous_response_id` is sent - the history itself is never
@@ -624,14 +752,21 @@ class AiClient {
   /// past the window every turn instead replays the local history -
   /// transcripts for older student turns, videos for the newest ones -
   /// with no `previous_response_id`, and the fresh response becomes
-  /// the (unchained-from) record of that turn. Each response that asks for tool calls has every call
-  /// performed through [executeToolCall] and its outcome sent straight
-  /// back as a `function_call_output` chained on that response's id, so
-  /// the model can keep calling tools step by step (draw, look at the
-  /// result, explain, draw more) until it answers with no further calls.
-  /// Without an executor the turn stays a single request, as before.
-  /// [AiStreamDone] is emitted once, at the very end, and carries the
-  /// final response id for the caller to persist with the AI message.
+  /// the (unchained-from) record of that turn.
+  ///
+  /// There is no agentic loop: a response's tool calls are performed
+  /// once through [executeToolCall], their outcomes are persisted on
+  /// the calls in [AiStreamDone.raw] (and replayed with the history of
+  /// later turns as `function_call_output` items), and the turn ends.
+  /// The single exception is failure: if any call in a round failed,
+  /// that round's outputs are sent back in one follow-up request so
+  /// the model can react to the failure (retry differently, work
+  /// around it, or explain it) instead of assuming success. That
+  /// failure follow-up can itself ask for tools, which are performed
+  /// the same way, bounded by [maxToolRounds]. Without an executor the
+  /// turn stays a single request, as before. [AiStreamDone] is
+  /// emitted once, at the very end, and carries the final response id
+  /// for the caller to persist with the AI message.
   Stream<AiEvent> streamTurn({
     required String model,
     required List<ChatMessage> history,
@@ -653,10 +788,23 @@ class AiClient {
     );
     final videoTurnCount =
         studentVideoTurns(history).length + (currentInHistory ? 0 : 1);
+    // Past this many student videos a chained request would keep
+    // every video ever stored on the chain, so replay takes over -
+    // permanently, since the count only grows within a session.
+    final pastVideoWindow = videoTurnCount > maxVideoTurnsPerRequest;
     final chainedId = previousResponseId ?? latestResponseId(history);
+    // An explicitly passed id is the caller's responsibility; an id
+    // recovered from history is only chained onto when its tool
+    // outputs (if any) were actually sent back in their turn.
+    final chainHasPendingToolOutputs =
+        previousResponseId == null &&
+        latestResponseHasPendingToolOutputs(history);
     final useChain =
-        chainedId != null && videoTurnCount <= maxVideoTurnsPerRequest;
+        chainedId != null && !chainHasPendingToolOutputs && !pastVideoWindow;
     var previousId = useChain ? chainedId : null;
+    // Stored only while a later turn may chain onto this one. Past
+    // the video window no turn ever chains again, so do not store.
+    final storeResponse = !pastVideoWindow;
     final request = _requestInput(
       history: history,
       videoBase64: videoBase64,
@@ -674,7 +822,16 @@ class AiClient {
     final allCalls = <Map<String, dynamic>>[];
     final responseIds = <String>[];
     List<Map<String, dynamic>> nextInput = request.input;
+    // In non-stored (past-window) mode a failure follow-up cannot
+    // chain on the failed round's response, so it resends this input
+    // plus each round's function_call/function_call_output items.
+    var failureReplayInput = request.input;
     var wrapUpNext = false;
+    // True when the final round's tool calls were performed but their
+    // (successful) outputs were not sent back; persisted on the AI
+    // message so the next turn replays history instead of chaining
+    // onto a stored response with unanswered function calls.
+    var toolOutputsPending = false;
 
     for (var round = 0; ; round++) {
       // Closed while the previous round (or its tool calls) was in
@@ -686,9 +843,10 @@ class AiClient {
         model: model,
         instructions: request.instructions,
         input: nextInput,
-        previousResponseId: previousId,
+        previousResponseId: pastVideoWindow ? null : previousId,
         reasoningEffort: reasoningEffort,
         allowTools: allowTools,
+        storeResponse: storeResponse,
       )) {
         if (event is _ResponseRound) {
           completed = event;
@@ -701,11 +859,19 @@ class AiClient {
       final result = completed;
       if (result == null || _closed) return;
       if (result.responseId != null && result.responseId!.isNotEmpty) {
-        previousId = result.responseId;
         responseIds.add(result.responseId!);
+        // A non-stored response cannot be chained onto; its id is
+        // kept only in [responseIds] for diagnostics, never as the
+        // next request's (or the persisted message's) response id.
+        if (!pastVideoWindow) previousId = result.responseId;
       }
       fullText.write(result.text);
-      if (result.calls.isEmpty || wrapUpNext) break;
+      if (result.calls.isEmpty || wrapUpNext) {
+        // This round sent no new calls (a wrap-up round's input was
+        // the previous round's outputs, so nothing is left pending).
+        toolOutputsPending = false;
+        break;
+      }
 
       final roundCalls = <Map<String, dynamic>>[];
       for (final call in result.calls) {
@@ -719,30 +885,16 @@ class AiClient {
       }
       // No executor: keep the old single-request behaviour. The calls
       // were still streamed above so the caller can perform them; only
-      // the chained follow-up request is skipped.
+      // performing them (and any failure follow-up) is skipped.
       if (executeToolCall == null) break;
 
-      // Every call must be answered under the exact call_id the API
-      // issued for it. A missing id can never be repaired locally -
-      // a synthesised one (call_<name>) is rejected with a 400
-      // ("function_call_output call_id ... does not match any
-      // function_call in the request or its previous_response_id
-      // chain") - so fail the turn before performing any of the
-      // round's calls instead of sending a doomed follow-up.
-      for (final call in result.calls) {
-        if (call.callId.isEmpty) {
-          throw AppError(
-            'Meta AI asked for an action (${call.name}) without a call '
-            'id, so its result could not be sent back. Your work is '
-            'safe on the board.',
-          );
-        }
-      }
-
-      // Perform every call in the order the model issued it and answer
-      // each one before the next request goes out. Outcomes are plain
-      // text only - no board screenshots or other multimodal payloads.
+      // Perform every call in the order the model issued it. Outcomes
+      // are recorded on the persisted calls (status/output, replayed
+      // with later turns' history), but successful outcomes are NOT
+      // sent back to the model: the turn ends here instead of looping
+      // for the model's next step.
       final outputs = <Map<String, dynamic>>[];
+      var anyFailure = false;
       for (final call in result.calls) {
         AiToolResult outcome;
         try {
@@ -755,6 +907,7 @@ class AiClient {
             '${detail.length > 200 ? detail.substring(0, 200) : detail}',
           );
         }
+        if (!outcome.success) anyFailure = true;
         final entry = roundCalls.firstWhere(
           (c) => call.callId.isNotEmpty
               ? c['id'] == call.callId
@@ -768,24 +921,69 @@ class AiClient {
           'output': outcome.wireOutput,
         });
       }
-      // Safety valve: after too many tool rounds, one last request with
-      // tools disabled lets the model wrap up in words instead of
-      // looping (or leaving its last calls unanswered) forever.
+      if (!anyFailure) {
+        toolOutputsPending = true;
+        break;
+      }
+
+      // A failure is the one outcome the model must hear about in this
+      // turn, so it can react instead of assuming the action happened.
+      // Every call of the round must be answered under the exact
+      // call_id the API issued for it; a missing id can never be
+      // repaired locally - a synthesised one (call_<name>) is rejected
+      // with a 400 ("function_call_output call_id ... does not match
+      // any function_call in the request or its previous_response_id
+      // chain") - so fail the turn rather than send a doomed follow-up.
+      // (Successful rounds never send outputs, so a missing id costs
+      // nothing unless a call actually failed.)
+      for (final call in result.calls) {
+        if (call.callId.isEmpty) {
+          throw AppError(
+            'Meta AI asked for an action (${call.name}) without a call '
+            'id, so its failure could not be sent back. Your work is '
+            'safe on the board.',
+          );
+        }
+      }
+      if (_closed) return;
+      // Safety valve: after too many failing rounds, one last request
+      // with tools disabled lets the model wrap up in words instead of
+      // looping on failures forever.
       if (round >= maxToolRounds) wrapUpNext = true;
-      nextInput = outputs;
+      if (pastVideoWindow) {
+        // Self-contained follow-up: the whole turn input, then this
+        // round's calls and their outputs, with no stored response
+        // to chain on.
+        nextInput = [
+          ...failureReplayInput,
+          for (final call in result.calls)
+            {
+              'type': 'function_call',
+              'call_id': call.callId,
+              'name': call.name,
+              'arguments': jsonEncode(call.args),
+            },
+          ...outputs,
+        ];
+        failureReplayInput = nextInput;
+      } else {
+        nextInput = outputs;
+      }
     }
 
     final raw = <String, dynamic>{
       'text': fullText.toString(),
       'toolCalls': allCalls,
+      'toolOutputsPending': toolOutputsPending,
       'responseId': previousId,
       'responseIds': responseIds,
     };
     yield AiStreamDone(raw, fullText.toString(), responseId: previousId);
   }
 
-  /// Streams a single Responses API request (`store: true`, chained on
-  /// [previousResponseId] when given) and finishes with a
+  /// Streams a single Responses API request (stored per
+  /// [storeResponse], chained on [previousResponseId] when given) and
+  /// finishes with a
   /// [_ResponseRound] describing the completed response: its id, its
   /// full text and every function call it asked for, with real call ids.
   Stream<AiEvent> _streamOneResponse({
@@ -869,6 +1067,7 @@ class AiClient {
               model: model,
               instructions: instructions,
               input: input,
+              parallelToolCalls: true,
               store: storeResponse,
               previousResponseId: previousResponseId,
               tools: includeTools ? toolSchemas() : null,
@@ -1050,8 +1249,8 @@ class AiClient {
 /// `dart_openai` closes the client passed to a streaming request in a
 /// `finally` block, whether it created that client or the caller did.
 /// Handing it this wrapper per request keeps ownership (and the actual
-/// close) with [AiClient], so one client can serve every round of a
-/// turn - including the `function_call_output` follow-ups.
+/// close) with [AiClient], so one client can serve every request of a
+/// turn - including a `function_call_output` failure follow-up.
 /// Wraps the AiClient's owned transport for handing to dart_openai.
 ///
 /// Two jobs:

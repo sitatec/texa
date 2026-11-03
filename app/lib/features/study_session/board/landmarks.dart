@@ -37,8 +37,29 @@ List<Offset> computeLandmarks(BoardElement target, String rawName) {
 
 List<Offset> _plotLandmark(BoardElement e, String name) {
   final xMin = e.xMin ?? -10, xMax = e.xMax ?? 10;
-  final sampled = samplePlot(e.expression ?? '', xMin, xMax, e.yMin, e.yMax);
-  final pts = sampled.points.where((p) => !p.dx.isNaN && !p.dy.isNaN).toList();
+  final expressions = [for (final s in e.plotSeries) s.expression];
+  if (expressions.isEmpty) return const [];
+  // Use the shared multi-curve sampling so markers land on the same
+  // y-scale the painter uses when several functions share the plot.
+  final sampled = samplePlotSeries(expressions, xMin, xMax, e.yMin, e.yMax);
+  final rect0 = e.rect;
+  Offset toBoard0(Offset d) => Offset(
+    rect0.left + (d.dx - xMin) / (xMax - xMin) * rect0.width,
+    rect0.bottom -
+        (d.dy - sampled.yMin) / (sampled.yMax - sampled.yMin) * rect0.height,
+  );
+  if (name == 'intersection' ||
+      name == 'intersections' ||
+      name == 'crossing' ||
+      name == 'crossings') {
+    if (expressions.length < 2) return const [];
+    return [
+      for (final pt in plotIntersections(expressions, xMin, xMax)) toBoard0(pt),
+    ];
+  }
+  final pts = (sampled.curves.isEmpty ? const <Offset>[] : sampled.curves.first)
+      .where((p) => !p.dx.isNaN && !p.dy.isNaN)
+      .toList();
   if (pts.isEmpty) return const [];
   final rect = e.rect;
   Offset toBoard(Offset d) => Offset(

@@ -13,6 +13,7 @@ class AppSettings {
     this.micPermissionDenied = false,
     this.macHeadphonesNoticeDismissed = false,
     this.setupComplete = false,
+    this.homeWelcomeSeen = false,
     this.ttsEngine,
   });
   final String apiKey;
@@ -23,6 +24,11 @@ class AppSettings {
   /// headphones notice; the session screen then never shows it.
   final bool macHeadphonesNoticeDismissed;
   final bool setupComplete;
+
+  /// True once the one-time welcome dialog has been presented on
+  /// Home. It is claimed before the dialog opens, so the dialog is
+  /// shown exactly once even if the app closes while it is open.
+  final bool homeWelcomeSeen;
 
   /// Voice engine explicitly chosen by the user, or null when they
   /// never changed it (then [ttsEngineOrDefault] applies).
@@ -40,6 +46,7 @@ class AppSettings {
     bool? micPermissionDenied,
     bool? macHeadphonesNoticeDismissed,
     bool? setupComplete,
+    bool? homeWelcomeSeen,
     TtsEngine? ttsEngine,
   }) => AppSettings(
     apiKey: apiKey ?? this.apiKey,
@@ -48,6 +55,7 @@ class AppSettings {
     macHeadphonesNoticeDismissed:
         macHeadphonesNoticeDismissed ?? this.macHeadphonesNoticeDismissed,
     setupComplete: setupComplete ?? this.setupComplete,
+    homeWelcomeSeen: homeWelcomeSeen ?? this.homeWelcomeSeen,
     ttsEngine: ttsEngine ?? this.ttsEngine,
   );
   Map<String, Object?> toJson() => {
@@ -55,6 +63,7 @@ class AppSettings {
     'micPermissionDenied': micPermissionDenied,
     'macHeadphonesNoticeDismissed': macHeadphonesNoticeDismissed,
     'setupComplete': setupComplete,
+    'homeWelcomeSeen': homeWelcomeSeen,
     'ttsEngine': ttsEngine?.name,
   };
   factory AppSettings.fromJson(Map<String, dynamic> j) => AppSettings(
@@ -64,6 +73,7 @@ class AppSettings {
     macHeadphonesNoticeDismissed:
         j['macHeadphonesNoticeDismissed'] as bool? ?? false,
     setupComplete: j['setupComplete'] as bool? ?? false,
+    homeWelcomeSeen: j['homeWelcomeSeen'] as bool? ?? false,
     ttsEngine: TtsEngine.values.asNameMap()[j['ttsEngine']],
   );
 }
@@ -169,6 +179,16 @@ class ChatMessage {
 }
 
 String newId() => DateTime.now().microsecondsSinceEpoch.toString();
+
+/// The title a new session gets when the student does not rename it.
+/// Shared by the creation dialog (which prefills it) and session
+/// creation (which falls back to it), so the prefilled text is
+/// exactly what would have been used before.
+String defaultSessionTitle(DateTime now) =>
+    'Session · ${now.day}/${now.month}, '
+    '${now.hour.toString().padLeft(2, '0')}:'
+    '${now.minute.toString().padLeft(2, '0')}';
+
 String relativeTime(DateTime t) {
   final d = DateTime.now().difference(t);
   if (d.inMinutes < 1) return 'Just now';

@@ -142,61 +142,11 @@ class _BoardViewState extends State<BoardView> {
               Positioned.fill(
                 child: ListenableBuilder(
                   listenable: controller,
-                  builder: (context, _) {
-                    final elements = controller.elements;
-                    return Stack(
-                      children: [
-                        Positioned.fill(
-                          child: CustomPaint(
-                            painter: _BoardPainter(
-                              elements,
-                              controller.revision,
-                            ),
-                          ),
-                        ),
-                        ...elements
-                            .where(
-                              (e) =>
-                                  e.kind != BoardElementKind.stroke &&
-                                  e.kind != BoardElementKind.plot &&
-                                  e.kind != BoardElementKind.landmark,
-                            )
-                            .map(
-                              (e) => Positioned(
-                                key: ValueKey(e.id),
-                                left: e.x,
-                                top: e.y,
-                                // Text wraps at the board's right edge
-                                // and takes whatever height its lines
-                                // need - its stored box is measured from
-                                // the content, and legacy boxes saved
-                                // with a fixed height must not clip it.
-                                width: e.kind == BoardElementKind.text
-                                    ? math.min(
-                                        e.width,
-                                        math.max(1.0, boardWidth - e.x),
-                                      )
-                                    : e.width,
-                                height: e.kind == BoardElementKind.text
-                                    ? null
-                                    : math.max(24, e.height),
-                                child: RepaintBoundary(
-                                  child: Opacity(
-                                    opacity: e.progress,
-                                    child: _elementWidget(e),
-                                  ),
-                                ),
-                              ),
-                            ),
-                        if (controller.pointer != null)
-                          Positioned(
-                            left: controller.pointer!.pos.dx - 10,
-                            top: controller.pointer!.pos.dy - 10,
-                            child: _Pointer(label: controller.pointer!.label),
-                          ),
-                      ],
-                    );
-                  },
+                  builder: (context, _) => _BoardContent(
+                    elements: controller.elements,
+                    revision: controller.revision,
+                    pointer: controller.pointer,
+                  ),
                 ),
               ),
               Positioned.fill(
@@ -225,38 +175,270 @@ class _BoardViewState extends State<BoardView> {
       ),
     );
   }
+}
 
-  Widget _elementWidget(BoardElement e) {
-    try {
-      return switch (e.kind) {
-        BoardElementKind.text => Align(
-          alignment: Alignment.topLeft,
-          child: Text(
-            e.text ?? '',
-            softWrap: true,
-            // Must stay identical to the style BoardController measures
-            // with, or the measured box no longer fits the rendered text.
-            style: BoardController.boardTextStyle(e.size, color: e.color),
-          ),
+/// Everything on the board except the live ink stroke and the input
+/// listener: the dot grid, strokes/plots/landmarks (painted) and the
+/// rich elements (widgets). Shared by the live board and
+/// [BoardPreview], so a preview can never drift from how the board
+/// itself renders the same elements.
+class _BoardContent extends StatelessWidget {
+  const _BoardContent({
+    required this.elements,
+    required this.revision,
+    this.pointer,
+  });
+  final List<BoardElement> elements;
+  final int revision;
+  final ({Offset pos, String? label})? pointer;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: CustomPaint(painter: _BoardPainter(elements, revision)),
         ),
-        BoardElementKind.math => Align(
-          alignment: Alignment.topLeft,
-          child: Math.tex(
-            e.latex ?? '',
-            mathStyle: MathStyle.display,
-            textStyle: TextStyle(color: e.color, fontSize: e.size),
-            onErrorFallback: (err) => Text(
-              e.latex ?? '',
-              style: TextStyle(color: texaRed, fontSize: e.size * 0.5),
+        ...elements
+            .where(
+              (e) =>
+                  e.kind != BoardElementKind.stroke &&
+                  e.kind != BoardElementKind.plot &&
+                  e.kind != BoardElementKind.landmark,
+            )
+            .map(
+              (e) => Positioned(
+                key: ValueKey(e.id),
+                left: e.x,
+                top: e.y,
+                // Text wraps at the board's right edge and takes
+                // whatever height its lines need - its stored box is
+                // measured from the content, and legacy boxes saved
+                // with a fixed height must not clip it.
+                width: e.kind == BoardElementKind.text
+                    ? math.min(e.width, math.max(1.0, boardWidth - e.x))
+                    : e.width,
+                height: e.kind == BoardElementKind.text
+                    ? null
+                    : math.max(24, e.height),
+                child: RepaintBoundary(
+                  child: Opacity(
+                    opacity: e.progress,
+                    child: _boardElementWidget(e),
+                  ),
+                ),
+              ),
             ),
+        if (pointer != null)
+          Positioned(
+            left: pointer!.pos.dx - 10,
+            top: pointer!.pos.dy - 10,
+            child: _Pointer(label: pointer!.label),
           ),
+      ],
+    );
+  }
+}
+
+/// Read-only rendering of a persisted board, exactly as it was left:
+/// every element at full opacity (never caught mid-animation), seen
+/// through the camera the session was closed with - same zoom, same
+/// pan - so the preview is a miniature of what reopening the session
+/// shows. That needs the size of the viewport the camera was saved
+/// in; snapshots saved before it was recorded fall back to fitting
+/// the whole board. Used for the home list's board preview, replacing
+/// the low-resolution raster thumbnail that could be captured before
+/// the final board changes were drawn.
+class BoardPreview extends StatelessWidget {
+  const BoardPreview({super.key, required this.snapshot});
+  final BoardSnapshot snapshot;
+
+  @override
+  Widget build(BuildContext context) {
+    final elements = snapshot.elements
+        .map((e) => e.copyWith(progress: 1))
+        .toList(growable: false);
+    final board = SizedBox(
+      width: boardWidth,
+      height: boardHeight,
+      child: _BoardContent(elements: elements, revision: 0),
+    );
+    final viewportSize = snapshot.cameraViewportSize;
+    return ClipRect(
+      child: ColoredBox(
+        color: Colors.white,
+        child: FittedBox(
+          fit: BoxFit.contain,
+          // Rebuild the session viewport at its saved size, apply
+          // the saved camera to the board inside it, and let the
+          // FittedBox shrink that whole viewport into the preview.
+          child: viewportSize == null
+              ? board
+              : SizedBox.fromSize(
+                  size: viewportSize,
+                  child: ClipRect(
+                    child: Transform(
+                      transform: snapshot.cameraTransform,
+                      alignment: Alignment.topLeft,
+                      child: board,
+                    ),
+                  ),
+                ),
         ),
-        BoardElementKind.svg => SvgStringWidget(svg: e.svg ?? ''),
-        _ => const SizedBox.shrink(),
-      };
-    } catch (_) {
-      return const SizedBox.shrink();
-    }
+      ),
+    );
+  }
+}
+
+Widget _boardElementWidget(BoardElement e) {
+  try {
+    return switch (e.kind) {
+      BoardElementKind.text => Align(
+        alignment: Alignment.topLeft,
+        child: Text(
+          e.text ?? '',
+          softWrap: true,
+          // Must stay identical to the style BoardController measures
+          // with, or the measured box no longer fits the rendered text.
+          style: BoardController.boardTextStyle(e.size, color: e.color),
+        ),
+      ),
+      BoardElementKind.math => _FittedMath(
+        latex: e.latex ?? '',
+        fontSize: e.size,
+        color: e.color,
+      ),
+      BoardElementKind.svg => SvgStringWidget(svg: e.svg ?? ''),
+      _ => const SizedBox.shrink(),
+    };
+  } catch (_) {
+    return const SizedBox.shrink();
+  }
+}
+
+/// LaTeX rendered inside its element's box by shrinking the font,
+/// never by growing the box.
+///
+/// A formula cannot wrap, so at the model's requested font size it can
+/// be wider (or taller) than its box and the renderer overflows
+/// ("RIGHT OVERFLOWED BY 73 PIXELS"). Instead of resizing the element,
+/// the formula's natural rendered size is measured at the requested
+/// font size (an invisible, unconstrained copy below) and the visible
+/// copy is rendered at the largest font size, up to the requested one,
+/// that fits the box in both dimensions. Because fitting is derived
+/// deterministically from (latex, requested size, box), it also covers
+/// elements edited after creation and legacy elements saved with an
+/// over-sized font. The visible copy appears one frame after the
+/// measurement, while the element is still fading in.
+class _FittedMath extends StatefulWidget {
+  const _FittedMath({
+    required this.latex,
+    required this.fontSize,
+    required this.color,
+  });
+  final String latex;
+  final double fontSize;
+  final Color color;
+
+  @override
+  State<_FittedMath> createState() => _FittedMathState();
+}
+
+class _FittedMathState extends State<_FittedMath> {
+  final _measureKey = GlobalKey();
+  double? _fittedFontSize;
+  String? _fittedFor;
+
+  String _signature(Size avail) =>
+      '${widget.latex}|${widget.fontSize}|${avail.width}x${avail.height}';
+
+  Widget _math(double fontSize, {Key? key}) => Math.tex(
+    widget.latex,
+    key: key,
+    mathStyle: MathStyle.display,
+    textStyle: TextStyle(color: widget.color, fontSize: fontSize),
+    onErrorFallback: (err) => Text(
+      widget.latex,
+      style: TextStyle(color: texaRed, fontSize: fontSize * 0.5),
+    ),
+  );
+
+  void _scheduleFit(Size avail) {
+    final signature = _signature(avail);
+    if (_fittedFor == signature) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _fittedFor == signature) return;
+      final measured =
+          _measureKey.currentContext?.findRenderObject() as RenderBox?;
+      // Unmeasurable (should not happen): fall back to the requested
+      // size rather than rendering nothing.
+      var fitted = widget.fontSize;
+      if (measured != null && measured.hasSize) {
+        final natural = measured.size;
+        var scale = 1.0;
+        if (natural.width > 0) {
+          scale = math.min(scale, (avail.width - 2) / natural.width);
+        }
+        if (natural.height > 0) {
+          scale = math.min(scale, (avail.height - 2) / natural.height);
+        }
+        fitted = widget.fontSize * scale.clamp(0.05, 1.0);
+      }
+      setState(() {
+        _fittedFor = signature;
+        _fittedFontSize = fitted;
+      });
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final bounded =
+            constraints.maxWidth.isFinite && constraints.maxHeight.isFinite;
+        final avail = bounded
+            ? Size(constraints.maxWidth, constraints.maxHeight)
+            : Size.infinite;
+        if (bounded) _scheduleFit(avail);
+        final fitted = bounded && _fittedFor == _signature(avail)
+            ? _fittedFontSize
+            : (bounded ? null : widget.fontSize);
+        return Stack(
+          children: [
+            const SizedBox.expand(),
+            // Invisible measuring copy at the requested font size,
+            // laid out unconstrained so its render size is the
+            // formula's natural size.
+            Positioned(
+              left: 0,
+              top: 0,
+              // Bounded size for the OverflowBox itself; only its
+              // child (the measuring copy) is laid out unconstrained.
+              width: bounded ? avail.width : 0,
+              height: bounded ? avail.height : 0,
+              child: IgnorePointer(
+                child: Opacity(
+                  opacity: 0,
+                  child: OverflowBox(
+                    alignment: Alignment.topLeft,
+                    minWidth: 0,
+                    minHeight: 0,
+                    maxWidth: double.infinity,
+                    maxHeight: double.infinity,
+                    child: _math(widget.fontSize, key: _measureKey),
+                  ),
+                ),
+              ),
+            ),
+            Align(
+              alignment: Alignment.topLeft,
+              child: fitted == null ? const SizedBox.shrink() : _math(fitted),
+            ),
+          ],
+        );
+      },
+    );
   }
 }
 

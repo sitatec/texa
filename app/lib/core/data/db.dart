@@ -466,4 +466,8 @@ class AppDb {
   }
 
   Future<String> loadLogs() async => await get('logs') ?? '';
+
+  Future<void> clearLogs() async {
+    await remove('logs');
+  }
 }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
@@ -12,6 +13,7 @@ import 'package:material_symbols_icons/symbols.dart';
 import 'package:mime/mime.dart';
 import 'package:texa/core/utils/snackbar.dart';
 import 'package:texa/core/theme.dart';
+import 'package:texa/features/study_session/ai/ai_client.dart';
 import 'package:texa/generated/i18n/translations.g.dart';
 import 'package:waveform_flutter/waveform_flutter.dart' as wf;
 
@@ -98,6 +100,12 @@ class TexaInputFileWidget extends StatefulWidget {
   /// Called with the selected files each time the upload modal closes.
   final ValueChanged<List<TexaLocalFile>>? onModalClosed;
 
+  /// Files already sent to the AI in earlier turns. Shown read-only in
+  /// the modal's "Uploaded Files" section, below the selected files:
+  /// sending a turn clears the selection, so without this the student
+  /// would have no way to see what the model already received.
+  final List<AiUpload> uploadedFiles;
+
   const TexaInputFileWidget({
     super.key,
     int? maxFiles,
@@ -114,6 +122,7 @@ class TexaInputFileWidget extends StatefulWidget {
     this.enableAudioRecording = true,
     this.iconOnly = false,
     this.onModalClosed,
+    this.uploadedFiles = const [],
   }) : maxFiles = maxFiles ?? 15,
        minFiles = minFiles ?? 0;
 
@@ -440,6 +449,11 @@ class _TexaInputFileWidgetState extends State<TexaInputFileWidget> {
                         ),
                       ],
                       const SizedBox(height: 16),
+                      Text(
+                        tr.session.inputFile.selectedFiles,
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 8),
                       Expanded(
                         child: _files.isEmpty
                             ? Center(
@@ -469,6 +483,27 @@ class _TexaInputFileWidgetState extends State<TexaInputFileWidget> {
                                 },
                               ),
                       ),
+                      if (widget.uploadedFiles.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          tr.session.inputFile.uploadedFiles,
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          height: 104,
+                          child: ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: widget.uploadedFiles.length,
+                            separatorBuilder: (_, _) =>
+                                const SizedBox(width: 10),
+                            itemBuilder: (context, index) =>
+                                TexaUploadedFilePreview(
+                                  upload: widget.uploadedFiles[index],
+                                ),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 12),
                       FilledButton(
                         onPressed: () => Navigator.pop(modalContext),
@@ -575,6 +610,86 @@ class _TexaInputFileWidgetState extends State<TexaInputFileWidget> {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// Small read-only preview of one file already sent to the AI: a
+/// thumbnail for images, a type icon otherwise, plus the file name.
+/// Shared by the upload modal's "Uploaded Files" section and the
+/// session history sheet.
+class TexaUploadedFilePreview extends StatelessWidget {
+  const TexaUploadedFilePreview({super.key, required this.upload});
+
+  final AiUpload upload;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SizedBox(
+      width: 72,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            width: 72,
+            height: 64,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: theme.colorScheme.outline.withValues(alpha: 0.5),
+              ),
+              color: theme.colorScheme.surfaceContainerHighest.withValues(
+                alpha: 0.3,
+              ),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: _UploadedThumbnailContent(upload: upload),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            upload.name,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UploadedThumbnailContent extends StatelessWidget {
+  const _UploadedThumbnailContent({required this.upload});
+
+  final AiUpload upload;
+
+  @override
+  Widget build(BuildContext context) {
+    if (upload.kind == AiUploadKind.image && upload.hasBase64) {
+      try {
+        return Image.memory(
+          base64Decode(upload.base64!),
+          fit: BoxFit.cover,
+          errorBuilder: (_, _, _) => _icon(context),
+        );
+      } catch (_) {
+        return _icon(context);
+      }
+    }
+    return _icon(context);
+  }
+
+  Widget _icon(BuildContext context) {
+    final IconData icon = switch (upload.kind) {
+      AiUploadKind.image => Symbols.image_rounded,
+      AiUploadKind.video => Symbols.videocam_rounded,
+      AiUploadKind.audio => Symbols.audio_file_rounded,
+      AiUploadKind.document => Symbols.description_rounded,
+    };
+    return Center(
+      child: Icon(icon, size: 30, color: Theme.of(context).colorScheme.primary),
     );
   }
 }

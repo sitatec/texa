@@ -51,16 +51,6 @@ void main() {
   );
 
   group('turn contract', () {
-    test('instructions tell the model it may end with TURN_DONE', () async {
-      final h = harness(
-        sse: 'data: {"type":"response.output_text.delta","delta":"hi"}\n\ndata: [DONE]\n\n',
-      );
-      final client = AiClient('key', client: h.client);
-      await turn(client).toList();
-      expect(h.lastBody()['instructions'], contains('<[TURN_DONE]>'));
-      expect(h.lastBody()['instructions'], contains('tool result'));
-    });
-
     test('prior (superseded) videos precede the current board video', () async {
       final h = harness(
         sse: 'data: {"type":"response.output_text.delta","delta":"hi"}\n\ndata: [DONE]\n\n',
@@ -142,11 +132,16 @@ void main() {
       // Six video turns in total: current is V6, so V1-V2 are
       // transcripts and V3-V6 are the four retained videos - despite
       // a stored response id being available.
-      await client
+      final events = await client
           .streamTurn(model: 'test-model', history: history, videoBase64: 'V6')
           .toList();
       final body = h.lastBody();
       expect(body.containsKey('previous_response_id'), isFalse);
+      // Replay has taken over for good past the window: nothing is
+      // stored, and no (non-stored) response id is handed back to
+      // persist as a future chain link.
+      expect(body['store'], isFalse);
+      expect((events.last as AiStreamDone).responseId, isNull);
       expect(body['instructions'], contains('TRANSCRIPTS'));
       final parts = userParts(body);
       expect(
@@ -212,11 +207,55 @@ void main() {
       expect(body.containsKey('tools'), isFalse);
       expect(body['instructions'], contains('DEIXIS'));
       expect(body['instructions'], contains('from here to here'));
+      expect(body['instructions'], contains('```transcript'));
       final input = body['input'] as List;
       expect(input, hasLength(1));
       expect((input.single as Map)['content'], [
         {'type': 'input_video', 'video_url': 'data:video/mp4;base64,ONLYVIDEO'},
       ]);
+    });
+
+    test('extractTranscript keeps only the transcript block', () {
+      expect(
+        AiClient.extractTranscript(
+          'Here is a detailed transcription:\n\n'
+          '```transcript\nSPEECH:\nhello\n```\n\nLet me know if you need more.',
+        ),
+        'SPEECH:\nhello',
+      );
+      // An unterminated block still yields everything after its fence.
+      expect(
+        AiClient.extractTranscript('```transcript\nSPEECH:\nhello'),
+        'SPEECH:\nhello',
+      );
+      // No fence at all: the whole reply is the fallback transcript.
+      expect(
+        AiClient.extractTranscript('  SPEECH:\nhello  '),
+        'SPEECH:\nhello',
+      );
+      expect(AiClient.extractTranscript('  '), '');
+    });
+
+    test('transcribeVideo discards text outside the block', () async {
+      String evt(Map<String, dynamic> e) => 'data: ${jsonEncode(e)}\n\n';
+      final h = harness(
+        sse: [
+          evt({
+            'type': 'response.output_text.delta',
+            'delta': 'Here is a detailed transcription:\n```transcript\nSPEECH: hi\n```\nDone.',
+          }),
+          evt({
+            'type': 'response.completed',
+            'response': {'id': 'resp_t', 'output': []},
+          }),
+          'data: [DONE]\n\n',
+        ].join(),
+      );
+      final transcript = await AiClient(
+        'key',
+        client: h.client,
+      ).transcribeVideo(model: 'test-model', videoBase64: 'V');
+      expect(transcript, 'SPEECH: hi');
     });
   });
 
@@ -252,10 +291,15 @@ void main() {
       expect(body['instructions'], contains('You are Texa'));
       final tools = body['tools'] as List;
       expect(tools, isNotEmpty);
-      // Responses tools are flat: no nested `function` wrapper.
-      expect((tools.first as Map)['type'], 'function');
-      expect((tools.first as Map)['name'], 'write_text');
-      expect((tools.first as Map).containsKey('function'), isFalse);
+      // The built-in web search tool is sent first, as its own
+      // top-level Responses tool (not a function).
+      expect(tools.first, {'type': 'web_search', 'search_context_size': 'low'});
+      // Function tools are flat: no nested `function` wrapper.
+      final firstFunction = tools.whereType<Map>().firstWhere(
+        (t) => t['type'] == 'function',
+      );
+      expect(firstFunction['name'], 'write_text');
+      expect(firstFunction.containsKey('function'), isFalse);
       expect(body['tool_choice'], 'auto');
       final input = body['input'] as List;
       final content = (input.last as Map)['content'] as List;
@@ -286,6 +330,81 @@ void main() {
         'video_url': 'data:video/mp4;base64,BOARDVIDEO',
       });
       expect(content, hasLength(6));
+    });
+
+    test('uploads of an earlier turn are replayed with that turn', () async {
+      final h = harness(
+        sse: 'data: {"type":"response.output_text.delta","delta":"hi"}\n\ndata: [DONE]\n\n',
+      );
+      final client = AiClient('key', client: h.client);
+      await turn(
+        client,
+        videoBase64: 'BOARDVIDEO',
+        history: [
+          message('student', {
+            'hasVideo': true,
+            'videoBase64': 'OLDVIDEO',
+            'uploads': [
+              const AiUpload(
+                name: 'pic.png',
+                mimeType: 'image/png',
+                base64: 'IMG',
+              ).toJson(),
+              const AiUpload(
+                name: 'notes.txt',
+                mimeType: 'text/plain',
+                text: 'old doc',
+              ).toJson(),
+            ],
+          }),
+        ],
+      ).toList();
+
+      final body = h.lastBody();
+      // A replay (no stored response to chain onto yet) is stored so
+      // the next turn can chain; only past-window replays are not.
+      expect(body['store'], isTrue);
+      final input = body['input'] as List;
+      final earlier = (input.first as Map)['content'] as List;
+      expect(earlier.first['text'], contains('old doc'));
+      expect(earlier.where((c) => c['type'] == 'input_image').single, {
+        'type': 'input_image',
+        'image_url': 'data:image/png;base64,IMG',
+      });
+      expect(earlier.last, {
+        'type': 'input_video',
+        'video_url': 'data:video/mp4;base64,OLDVIDEO',
+      });
+      // ...and the current turn carries only its own board video.
+      final current = (input.last as Map)['content'] as List;
+      expect(current, [
+        {
+          'type': 'input_video',
+          'video_url': 'data:video/mp4;base64,BOARDVIDEO',
+        },
+      ]);
+    });
+
+    test('uploads round-trip through the persisted message payload', () {
+      final student = message('student', {
+        'uploads': [
+          const AiUpload(
+            name: 'pic.png',
+            mimeType: 'image/png',
+            base64: 'IMG',
+          ).toJson(),
+          const AiUpload(
+            name: 'notes.txt',
+            mimeType: 'text/plain',
+            text: 'hello',
+          ).toJson(),
+        ],
+      });
+      final uploads = AiClient.uploadsOf(student);
+      expect(uploads.map((u) => u.name), ['pic.png', 'notes.txt']);
+      expect(uploads.first.base64, 'IMG');
+      expect(uploads.last.text, 'hello');
+      expect(AiClient.uploadsOf(message('student', const {})), isEmpty);
     });
 
     test('kind is derived from MIME type, then extension', () {
@@ -459,7 +578,7 @@ void main() {
     });
   });
 
-  group('stored responses and the agentic tool loop', () {
+  group('stored responses and tool results', () {
     String evt(Map<String, dynamic> e) => 'data: ${jsonEncode(e)}\n\n';
 
     /// Mock transport that answers POSTs in order and records bodies.
@@ -550,7 +669,8 @@ void main() {
       expect((done as AiStreamDone).responseId, 'resp_9');
     });
 
-    test('tool results are sent back and the loop continues', () async {
+    test('successful tool results are persisted, not sent back, and '
+        'the turn ends after one request', () async {
       final h = sequence([toolRound(), textRound('resp_2', 'Done')]);
       final executed = <String>[];
       final events = await AiClient('key', client: h.client)
@@ -566,36 +686,74 @@ void main() {
           .toList();
 
       expect(executed, ['write_math']);
-      expect(h.bodies, hasLength(2));
-      final followUp = h.bodies[1];
-      expect(followUp['store'], isTrue);
-      expect(followUp['previous_response_id'], 'resp_1');
-      expect(followUp['input'], [
-        {
-          'type': 'function_call_output',
-          'call_id': 'call_write_math',
-          'output': '{"status":"success","detail":"write_math performed."}',
-        },
-      ]);
+      // No follow-up request: the model never sees the success result
+      // in this turn, so it cannot continue with a next step.
+      expect(h.bodies, hasLength(1));
       expect(
         events.whereType<AiToolCallComplete>().single.callId,
         'call_write_math',
       );
       final done = events.last as AiStreamDone;
-      expect(done.fullText, 'Done');
-      expect(done.responseId, 'resp_2');
-      expect(done.raw['responseId'], 'resp_2');
+      expect(done.fullText, '');
+      expect(done.responseId, 'resp_1');
+      expect(done.raw['responseId'], 'resp_1');
+      // The outcome is still recorded on the persisted call, for the
+      // history sheet and for replay in a later turn's request.
       final savedCall = (done.raw['toolCalls'] as List).single as Map;
       expect(savedCall['id'], 'call_write_math');
       expect(savedCall['status'], 'success');
       expect(savedCall['output'], contains('write_math performed.'));
+      expect(done.raw['toolOutputsPending'], isTrue);
+    });
+
+    test('a turn after pending tool outputs replays history (with the '
+        'persisted outputs) instead of chaining', () async {
+      final h = sequence([textRound('resp_9', 'hi')]);
+      final client = AiClient('key', client: h.client);
+      await turn(
+        client,
+        history: [
+          message('ai', {
+            'text': 'Let me draw.',
+            'responseId': 'resp_8',
+            'toolOutputsPending': true,
+            'toolCalls': [
+              {
+                'id': 'call_1',
+                'name': 'write_text',
+                'args': {'element_id': 'title'},
+                'status': 'success',
+                'output': '{"status":"success","detail":"done"}',
+              },
+            ],
+          }),
+          message('user', {'text': 'earlier question'}),
+        ],
+      ).toList();
+
+      expect(h.bodies, hasLength(1));
+      final body = h.bodies.single;
+      // The stored response's function calls were never answered on
+      // the server, so chaining onto it is unsafe; the replay answers
+      // them locally with their persisted outputs instead.
+      expect(body['previous_response_id'], isNull);
+      final input = body['input'] as List;
+      final call = input.firstWhere(
+        (item) => item is Map && item['type'] == 'function_call',
+      ) as Map;
+      expect(call['call_id'], 'call_1');
+      final output = input.firstWhere(
+        (item) => item is Map && item['type'] == 'function_call_output',
+      ) as Map;
+      expect(output['call_id'], 'call_1');
+      expect(output['output'], contains('done'));
     });
 
     // Regression (real API event order): the call_id only appears on
     // the output item, which arrives *after* function_call_arguments
     // .done. Finishing the call at arguments.done used to lock in an
-    // empty id, and the follow-up then sent an invented
-    // 'call_write_text', which the server rejects with a 400
+    // empty id, and a failure follow-up would then have sent an
+    // invented 'call_write_text', which the server rejects with a 400
     // ("function_call_output call_id ... does not match any
     // function_call in the request or its previous_response_id chain").
     test('call_id from the output item, arriving after arguments, is '
@@ -673,14 +831,17 @@ void main() {
         events.whereType<AiToolCallComplete>().single.callId,
         'call_write_text',
       );
-      expect(h.bodies, hasLength(2));
-      final followUpInput = h.bodies[1]['input'] as List;
-      expect((followUpInput.single as Map)['call_id'], 'call_write_text');
-      expect((events.last as AiStreamDone).fullText, 'Done');
+      // The call succeeded, so no result is sent back in this turn;
+      // the real call_id is still the one persisted with the call.
+      expect(h.bodies, hasLength(1));
+      final savedCall =
+          ((events.last as AiStreamDone).raw['toolCalls'] as List).single
+              as Map;
+      expect(savedCall['id'], 'call_write_text');
     });
 
-    test('a tool call that never receives a call_id fails instead of '
-        'inventing one', () async {
+    test('a failing tool call that never receives a call_id fails '
+        'instead of inventing one', () async {
       final noIdRound = [
         evt({
           'type': 'response.created',
@@ -708,7 +869,7 @@ void main() {
               history: const [],
               executeToolCall: (name, args) async {
                 executed++;
-                return const AiToolResult.success('performed');
+                return const AiToolResult.failure('no such element');
               },
             )
             .toList(),
@@ -720,9 +881,45 @@ void main() {
           ),
         ),
       );
-      // Nothing performed, and no follow-up request was sent.
-      expect(executed, 0);
+      // The call was performed (that is how its failure is known), but
+      // no follow-up request was sent with an invented id.
+      expect(executed, 1);
       expect(h.bodies, hasLength(1));
+    });
+
+    test('a successful tool call without a call_id ends the turn '
+        'normally', () async {
+      final noIdRound = [
+        evt({
+          'type': 'response.created',
+          'response': {'id': 'resp_1'},
+        }),
+        evt({
+          'type': 'response.function_call_arguments.done',
+          'item_id': 'fc1',
+          'name': 'write_text',
+          'arguments': '{"text":"Functions"}',
+        }),
+        evt({
+          'type': 'response.completed',
+          'response': {'id': 'resp_1', 'output': []},
+        }),
+        'data: [DONE]\n\n',
+      ].join();
+      final h = sequence([noIdRound]);
+      final events = await AiClient('key', client: h.client)
+          .streamTurn(
+            videoBase64: '',
+            model: 'test-model',
+            history: const [],
+            executeToolCall: (name, args) async =>
+                const AiToolResult.success('performed'),
+          )
+          .toList();
+      // Nothing is sent back on success, so the missing id never
+      // reaches the API.
+      expect(h.bodies, hasLength(1));
+      expect(events.last, isA<AiStreamDone>());
     });
 
     test(
@@ -752,27 +949,26 @@ void main() {
     // when the stream ends. With a real (close-sensitive) transport the
     // function_call_output round used to fail with "Client is already
     // closed"; MockClient hides that because its close() is a no-op.
-    test(
-      'tool loop survives a transport that refuses reuse after close',
-      () async {
-        final h = sequence([toolRound(), textRound('resp_2', 'Done')]);
-        final events =
-            await AiClient('key', client: _CloseSensitiveClient(h.client))
-                .streamTurn(
-                  videoBase64: '',
-                  model: 'test-model',
-                  history: const [],
-                  executeToolCall: (name, args) async =>
-                      const AiToolResult.success('performed'),
-                )
-                .toList();
+    test('failure follow-up survives a transport that refuses reuse '
+        'after close', () async {
+      final h = sequence([toolRound(), textRound('resp_2', 'Done')]);
+      final events =
+          await AiClient('key', client: _CloseSensitiveClient(h.client))
+              .streamTurn(
+                videoBase64: '',
+                model: 'test-model',
+                history: const [],
+                executeToolCall: (name, args) async =>
+                    const AiToolResult.failure('no such element'),
+              )
+              .toList();
 
-        expect(h.bodies, hasLength(2));
-        expect((events.last as AiStreamDone).fullText, 'Done');
-      },
-    );
+      expect(h.bodies, hasLength(2));
+      expect((events.last as AiStreamDone).fullText, 'Done');
+    });
 
-    test('sequential rounds keep chaining on the newest response id', () async {
+    test('sequential failing rounds keep chaining on the newest '
+        'response id', () async {
       final h = sequence([
         toolRound(),
         toolRound().replaceAll('resp_1', 'resp_2'),
@@ -786,7 +982,7 @@ void main() {
             history: const [],
             executeToolCall: (name, args) async {
               calls++;
-              return AiToolResult.success('step $calls done');
+              return AiToolResult.failure('step $calls failed');
             },
           )
           .toList();
@@ -796,6 +992,53 @@ void main() {
       expect(h.bodies[1]['previous_response_id'], 'resp_1');
       expect(h.bodies[2]['previous_response_id'], 'resp_2');
       expect((events.last as AiStreamDone).responseId, 'resp_3');
+    });
+
+    test('past the video window a failing tool is answered with a '
+        'self-contained, non-stored follow-up', () async {
+      final h = sequence([toolRound(), textRound('resp_2', 'Recovered')]);
+      // Five saved student video turns plus the current one: replay
+      // mode, past the window.
+      final history = [
+        for (var n = 1; n <= 5; n++)
+          message('student', {'hasVideo': true, 'videoBase64': 'V$n'}),
+      ];
+      final events = await AiClient('key', client: h.client)
+          .streamTurn(
+            videoBase64: 'V6',
+            model: 'test-model',
+            history: history,
+            executeToolCall: (name, args) async =>
+                const AiToolResult.failure('no such element'),
+          )
+          .toList();
+
+      expect(h.bodies, hasLength(2));
+      for (final body in h.bodies) {
+        expect(body['store'], isFalse);
+        expect(body.containsKey('previous_response_id'), isFalse);
+      }
+      // The follow-up resends the turn (replayed history included)
+      // plus the call and its output, since there is no stored
+      // response to chain the output onto.
+      final followUpInput = h.bodies[1]['input'] as List;
+      expect(
+        followUpInput.any((item) => item is Map && item['role'] == 'user'),
+        isTrue,
+      );
+      final call = followUpInput.firstWhere(
+        (item) => item is Map && item['type'] == 'function_call',
+      ) as Map;
+      expect(call['call_id'], 'call_write_math');
+      final output = followUpInput.firstWhere(
+        (item) => item is Map && item['type'] == 'function_call_output',
+      ) as Map;
+      expect(output['call_id'], 'call_write_math');
+      expect(output['output'], contains('no such element'));
+      final done = events.last as AiStreamDone;
+      expect(done.fullText, 'Recovered');
+      expect(done.responseId, isNull);
+      expect(done.raw['responseId'], isNull);
     });
   });
 

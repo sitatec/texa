@@ -252,6 +252,33 @@ class Translations$home$en {
   String get emptyBody =>
       'Drop in a document, snap a photo of your problem,\nor sketch it directly on the board—then work through it with Texa.';
 
+  /// Title of the one-time welcome dialog shown the first time Home renders.
+  ///
+  /// en: 'Welcome to Texa'
+  String get welcomeTitle => 'Welcome to Texa';
+
+  /// Heading of the welcome dialog section explaining that Texa guides rather than handing out solutions.
+  ///
+  /// en: 'A tutor, not an answer machine'
+  String get welcomeGuideTitle => 'A tutor, not an answer machine';
+
+  /// Body of the welcome dialog section explaining that Texa guides rather than handing out solutions.
+  ///
+  /// en: 'Texa is built to help you understand, not to do the thinking for you. Bring a problem and Texa will ask what you think, encourage you to try, and then guide you step by step with questions, hints and support until it clicks. You won't be handed a finished solution—but you'll come away able to solve the next problem yourself.'
+  String get welcomeGuideBody =>
+      'Texa is built to help you understand, not to do the thinking for you. Bring a problem and Texa will ask what you think, encourage you to try, and then guide you step by step with questions, hints and support until it clicks. You won\'t be handed a finished solution—but you\'ll come away able to solve the next problem yourself.';
+
+  /// Heading of the welcome dialog section asking for a quiet environment.
+  ///
+  /// en: 'Pick a quiet spot'
+  String get welcomeQuietTitle => 'Pick a quiet spot';
+
+  /// Body of the welcome dialog section asking for a quiet environment, since background voices slow Texa down.
+  ///
+  /// en: 'Texa learns by listening as you talk through your ideas, so background voices can be picked up too. Texa can usually tell your speech apart from unrelated voices, but telling them apart takes extra effort and slows its replies down. A quiet environment keeps the conversation quick and focused.'
+  String get welcomeQuietBody =>
+      'Texa learns by listening as you talk through your ideas, so background voices can be picked up too. Texa can usually tell your speech apart from unrelated voices, but telling them apart takes extra effort and slows its replies down. A quiet environment keeps the conversation quick and focused.';
+
   /// Settings button tooltip on Home.
   ///
   /// en: 'Settings'
@@ -336,6 +363,10 @@ class Translations$home$en {
   ///
   /// en: 'Extra high'
   String get reasoningXHigh => 'Extra high';
+
+  /// en: 'Lower reasoning efforts results in faster responses but may lead to errors in complex problems'
+  String get reasoningDescription =>
+      'Lower reasoning efforts results in faster responses but may lead to errors in complex problems';
 
   /// Home session card chip showing the session reasoning effort.
   ///
@@ -818,6 +849,16 @@ class Translations$session$inputFile$en {
   /// en: 'No files selected yet. Choose an option above to add some.'
   String get noFilesYet => 'No files selected yet. Choose an option above to add some.';
 
+  /// Heading above the files selected in the upload modal but not sent yet.
+  ///
+  /// en: 'Selected files'
+  String get selectedFiles => 'Selected files';
+
+  /// Heading above the files already sent to the AI in earlier turns, shown in the upload modal and as previews in the history sheet.
+  ///
+  /// en: 'Uploaded Files'
+  String get uploadedFiles => 'Uploaded Files';
+
   /// Label on the file control showing how many files are attached. {count} is the number.
   ///
   /// en: '{count} file(s) attached'
@@ -886,6 +927,11 @@ extension on Translations {
       'home.newSession' => 'New session',
       'home.emptyTitle' => 'Start learning with Texa',
       'home.emptyBody' => 'Drop in a document, snap a photo of your problem,\nor sketch it directly on the board—then work through it with Texa.',
+      'home.welcomeTitle' => 'Welcome to Texa',
+      'home.welcomeGuideTitle' => 'A tutor, not an answer machine',
+      'home.welcomeGuideBody' => 'Texa is built to help you understand, not to do the thinking for you. Bring a problem and Texa will ask what you think, encourage you to try, and then guide you step by step with questions, hints and support until it clicks. You won\'t be handed a finished solution—but you\'ll come away able to solve the next problem yourself.',
+      'home.welcomeQuietTitle' => 'Pick a quiet spot',
+      'home.welcomeQuietBody' => 'Texa learns by listening as you talk through your ideas, so background voices can be picked up too. Texa can usually tell your speech apart from unrelated voices, but telling them apart takes extra effort and slows its replies down. A quiet environment keeps the conversation quick and focused.',
       'home.settings' => 'Settings',
       'home.deleteSessionTitle' => 'Delete this session?',
       'home.deleteSessionBody' => 'Its board and history will be permanently deleted from this device.',
@@ -903,6 +949,8 @@ extension on Translations {
       'home.reasoningMedium' => 'Medium',
       'home.reasoningHigh' => 'High',
       'home.reasoningXHigh' => 'Extra high',
+      'home.reasoningDescription' =>
+        'Lower reasoning efforts results in faster responses but may lead to errors in complex problems',
       'home.reasoningChip' => ({required Object effort}) => 'Reasoning: ${effort}',
       'session.listening' => 'Listening…',
       'session.capturing' => 'Listening — I can hear you',
@@ -967,6 +1015,8 @@ extension on Translations {
       'session.inputFile.recordAudioTooltip' => 'Record audio',
       'session.inputFile.fileTooLarge' => ({required Object sizeInMb}) => 'Files must be ${sizeInMb} MB or smaller',
       'session.inputFile.noFilesYet' => 'No files selected yet. Choose an option above to add some.',
+      'session.inputFile.selectedFiles' => 'Selected files',
+      'session.inputFile.uploadedFiles' => 'Uploaded Files',
       'session.inputFile.filesAttached' => ({required Object count}) => '${count} file(s) attached',
       'session.inputFile.removeFile' => 'Remove file',
       'settings.title' => 'Settings',

@@ -7,7 +7,9 @@ import '../../../core/theme.dart';
 import '../../../generated/i18n/translations.g.dart';
 import '../board/board_models.dart';
 import '../board/board_widget.dart';
+import '../ai/ai_client.dart';
 import '../board/plot_preview.dart';
+import '../file_attachment/input_file_widget.dart';
 import 'turn_video_player.dart';
 
 /// Present-tense status label for a tool while it is being performed
@@ -67,15 +69,27 @@ class SessionHistoryEntry extends StatelessWidget {
     final isAi = m.role == 'ai';
     final text = m.payload['text'] as String? ?? '';
     final video = isAi ? null : m.payload['videoBase64'] as String?;
-    final transcript = isAi ? null : m.payload['transcript'] as String?;
+    final uploads = isAi ? const <AiUpload>[] : AiClient.uploadsOf(m);
     final calls = m.payload['toolCalls'];
     return ListTile(
       leading: Icon(isAi ? Symbols.auto_awesome : Symbols.person_outline),
+      titleAlignment: .top,
       title: Text(isAi ? 'Texa' : 'You'),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (text.isNotEmpty) Text(text),
+          if (uploads.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final upload in uploads)
+                  TexaUploadedFilePreview(upload: upload),
+              ],
+            ),
+          ],
           if (calls is List)
             for (final call in calls)
               if (call is Map && !_internalTools.contains(call['name']))
@@ -89,13 +103,6 @@ class SessionHistoryEntry extends StatelessWidget {
                 base64Video: video,
                 messageId: m.id,
               ),
-            ),
-          ],
-          if (transcript != null && transcript.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(
-              transcript,
-              style: const TextStyle(fontSize: 13, color: Colors.black54),
             ),
           ],
         ],
@@ -177,9 +184,9 @@ class _ActionEntry extends StatelessWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if ((element.expression ?? '').isNotEmpty)
+            if (element.plotSeries.isNotEmpty)
               Text(
-                element.expression!,
+                _plotCaption(element),
                 style: const TextStyle(fontSize: 13, color: Colors.black54),
               ),
             const SizedBox(height: 4),
@@ -219,6 +226,19 @@ class _ActionEntry extends StatelessWidget {
     }
   }
 
+  /// Human caption for a plot's functions, e.g. `f(x) = x^2` for a
+  /// single unlabelled curve, or `f(x) = x^2  ·  g(x) = 2*x+1` when
+  /// several labelled curves share the plot.
+  String _plotCaption(BoardElement element) => element.plotSeries
+      .map(
+        (s) => (s.label != null && s.label!.trim().isNotEmpty)
+            ? '${s.label!.trim()}(x) = ${s.expression}'
+            : element.plotSeries.length == 1
+            ? 'f(x) = ${s.expression}'
+            : s.expression,
+      )
+      .join('  ·  ');
+
   void _enlargePlot(BuildContext context, BoardElement element) {
     showDialog<void>(
       context: context,
@@ -233,7 +253,9 @@ class _ActionEntry extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      element.expression ?? tr.session.plottedFunction,
+                      element.plotSeries.isNotEmpty
+                          ? _plotCaption(element)
+                          : tr.session.plottedFunction,
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,

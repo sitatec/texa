@@ -17,18 +17,27 @@ class PlotPainter extends CustomPainter {
 
   /// Plot sampling is pure but not cheap; cache per element content.
   static final _plotCache =
-      <String, ({List<Offset> points, double yMin, double yMax})>{};
+      <String, ({List<List<Offset>> curves, double yMin, double yMax})>{};
 
   @override
   void paint(Canvas canvas, Size size) {
     final e = element;
+    final series = e.plotSeries;
+    if (series.isEmpty) return;
     final xMin = e.xMin ?? -10, xMax = e.xMax ?? 10;
-    final key = '${e.id}|${e.expression}|$xMin|$xMax|${e.yMin}|${e.yMax}';
+    final key =
+        '${e.id}|${series.map((s) => '${s.expression}:${s.color?.toARGB32()}').join('|')}|$xMin|$xMax|${e.yMin}|${e.yMax}';
     final sampled = _plotCache.putIfAbsent(
       key,
-      () => samplePlot(e.expression ?? '', xMin, xMax, e.yMin, e.yMax),
+      () => samplePlotSeries(
+        [for (final s in series) s.expression],
+        xMin,
+        xMax,
+        e.yMin,
+        e.yMax,
+      ),
     );
-    if (sampled.points.isEmpty) return;
+    if (sampled.curves.every((c) => c.isEmpty)) return;
     // The element rect, translated to the painter's own origin.
     final rect = Offset.zero & size;
     double mx(double x) => rect.left + (x - xMin) / (xMax - xMin) * rect.width;
@@ -59,30 +68,36 @@ class PlotPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.5,
     );
-    final paint = Paint()
-      ..color = e.color.withValues(alpha: progress)
-      ..strokeWidth = 4
-      ..strokeCap = StrokeCap.round
-      ..style = PaintingStyle.stroke;
-    final path = Path();
-    var penDown = false;
-    final total = sampled.points.length;
-    final visible = (total * progress).ceil();
-    for (var i = 0; i < math.min(visible, total); i++) {
-      final p = sampled.points[i];
-      if (p.dx.isNaN) {
-        penDown = false;
-        continue;
+    for (var s = 0; s < sampled.curves.length; s++) {
+      final points = sampled.curves[s];
+      final paint = Paint()
+        ..color =
+            (series[s].color ?? plotSeriesPalette[s % plotSeriesPalette.length])
+                .withValues(alpha: progress)
+        ..strokeWidth = 4
+        ..strokeCap = StrokeCap.round
+        ..style = PaintingStyle.stroke;
+      final path = Path();
+      var penDown = false;
+      final total = points.length;
+      final visible = (total * progress).ceil();
+      for (var i = 0; i < math.min(visible, total); i++) {
+        final p = points[i];
+        if (p.dx.isNaN) {
+          penDown = false;
+          continue;
+        }
+        final o = Offset(mx(p.dx), my(p.dy.clamp(sampled.yMin, sampled.yMax)));
+        if (!penDown) {
+          path.moveTo(o.dx, o.dy);
+          penDown = true;
+        } else {
+          path.lineTo(o.dx, o.dy);
+        }
       }
-      final o = Offset(mx(p.dx), my(p.dy.clamp(sampled.yMin, sampled.yMax)));
-      if (!penDown) {
-        path.moveTo(o.dx, o.dy);
-        penDown = true;
-      } else {
-        path.lineTo(o.dx, o.dy);
-      }
+      canvas.drawPath(path, paint);
     }
-    canvas.drawPath(path, paint);
+    if (series.length > 1) _paintLegend(canvas, rect, series);
     final labelStyle = const TextStyle(color: Color(0xFF6B7280), fontSize: 20);
     for (final (text, pos) in [
       (
@@ -104,6 +119,56 @@ class PlotPainter extends CustomPainter {
         textDirection: TextDirection.ltr,
       )..layout();
       tp.paint(canvas, pos);
+    }
+  }
+
+  void _paintLegend(Canvas canvas, Rect rect, List<PlotSeries> series) {
+    const style = TextStyle(color: Color(0xFF374151), fontSize: 16);
+    final painters = <TextPainter>[];
+    var maxWidth = 0.0;
+    for (final s in series) {
+      final tp = TextPainter(
+        text: TextSpan(text: s.displayLabel, style: style),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+        ellipsis: '…',
+      )..layout(maxWidth: math.max(60, rect.width - 90));
+      painters.add(tp);
+      maxWidth = math.max(maxWidth, tp.width);
+    }
+    const rowHeight = 22.0, swatchWidth = 26.0, padding = 8.0;
+    final box = Rect.fromLTWH(
+      rect.right - maxWidth - swatchWidth - padding * 3,
+      rect.top + padding,
+      maxWidth + swatchWidth + padding * 3,
+      series.length * rowHeight + padding,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(box, const Radius.circular(6)),
+      Paint()..color = Colors.white.withValues(alpha: 0.88 * progress),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(box, const Radius.circular(6)),
+      Paint()
+        ..color = const Color(0xFFD1D5DB)
+        ..style = PaintingStyle.stroke,
+    );
+    for (var i = 0; i < series.length; i++) {
+      final y = box.top + padding / 2 + i * rowHeight + rowHeight / 2;
+      final color =
+          series[i].color ?? plotSeriesPalette[i % plotSeriesPalette.length];
+      canvas.drawLine(
+        Offset(box.left + padding, y),
+        Offset(box.left + padding + swatchWidth - 6, y),
+        Paint()
+          ..color = color.withValues(alpha: progress)
+          ..strokeWidth = 4
+          ..strokeCap = StrokeCap.round,
+      );
+      painters[i].paint(
+        canvas,
+        Offset(box.left + padding + swatchWidth, y - painters[i].height / 2),
+      );
     }
   }
 
@@ -131,17 +196,23 @@ BoardElement plotElementFromArgs(
   String fallbackId = 'history-plot',
 }) {
   double? n(String k) => (args[k] as num?)?.toDouble();
+  final series = plotSeriesFromArgs(args);
   return BoardElement(
     id: args['element_id'] as String? ?? fallbackId,
     kind: BoardElementKind.plot,
     owner: BoardOwner.ai,
     width: n('width') ?? 420,
     height: n('height') ?? 260,
-    expression: args['expression'] as String?,
+    expression: series.isNotEmpty
+        ? series.first.expression
+        : args['expression'] as String?,
+    series: series,
     xMin: n('x_min'),
     xMax: n('x_max'),
     yMin: n('y_min'),
     yMax: n('y_max'),
-    color: colorFromName(args['color'] as String?, const Color(0xFF1F2937)),
+    color: series.isNotEmpty && series.first.color != null
+        ? series.first.color!
+        : colorFromName(args['color'] as String?, const Color(0xFF1F2937)),
   );
 }

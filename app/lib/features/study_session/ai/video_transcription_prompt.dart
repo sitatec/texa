@@ -5,7 +5,7 @@
 /// be a self-contained record of everything the video communicated -
 /// not a summary of "the student pointed and said…". See
 /// `docs/TECH_SPECS.md` section 8.2.
-const kVideoTranscriptionPromptVersion = 'v1.0.0';
+const kVideoTranscriptionPromptVersion = 'v1.1.0';
 
 const kVideoTranscriptionPrompt = '''
 You are producing the permanent written record of ONE student turn in a STEM tutoring session. The input is a low-frame-rate video of a shared whiteboard. Capture everything a future reader needs to understand exactly what the student communicated. Do not answer the student, do not tutor, do not solve anything, and do not add a preamble or conclusion - output only the record, in the structure below.
@@ -23,14 +23,23 @@ Words like "here", "there", "this", "that one", "from here to here", "this bit" 
 - Bind speech to gesture in time: when the student says "from here… to here" while moving, write what "here" was at each end of the movement, in the same sentence as the quoted words.
 - If you cannot tell what was indicated, say so explicitly ([pointing target uncertain: between … and …]) - never write "points at the board" or "points here" and leave it at that.
 
-BOARD AND ACTIONS, IN ORDER:
+BOARD AND ACTIONS:
 - Describe the board as it is when the turn starts: every piece of writing, formula, diagram, graph and label already visible, quoted exactly where legible, with approximate positions. This is the context the student's words refer to.
-- Then narrate, chronologically, everything that happens: what the student writes or draws (quote new writing exactly, describe new diagrams - shapes, labels, axes, scales, arrows), what they erase or cross out (and what was removed), and any pointing or gesturing, resolved as above. Note who appears to have produced existing content only if it is visually obvious; otherwise just describe the content.
-- Describe the board as it is when the turn ends: all content now present, quoted exactly where legible, noting what changed during the turn. A future reader must be able to reconstruct the final board from this section alone.
+- Then narrate, chronologically, everything that happens: what the student writes or draws (quote new writing exactly, describe new diagrams - shapes, labels, axes, scales, arrows), what they erase or cross out (and what was removed), and any pointing or gesturing, resolved as above.
 - If writing is illegible, transcribe the legible parts and mark the rest [illegible: looks like …] with your best reading labelled as a guess. Never invent neat content to fill a gap.
 
 INTENT:
 - End with one or two sentences stating, in the student's own terms, what they are asking, attempting, claiming or unsure about (for example: the student is asking why the graph goes below the axis between the two roots they pointed at). If they stated no question, say what they were doing instead (reading the problem aloud, thinking aloud, checking an answer…).
 
-Use plain text with the three headings SPEECH:, BOARD AND ACTIONS, IN ORDER: (merge board start, changes and end into this chronological account, clearly marking the starting and ending states), and INTENT:. Keep it as short as completeness allows - but completeness wins: when in doubt, include it.
+Use plain text with the three headings "SPEECH:", "BOARD AND ACTIONS, IN ORDER:" (merge board start, changes and end into this chronological account), and "INTENT:". Keep it as short as completeness allows - but completeness wins: when in doubt, include it.
+
+OUTPUT FORMAT:
+Output the complete record inside exactly one fenced code block whose info string is "transcript", like this:
+
+```transcript
+SPEECH:
+…
+```
+
+Do not write anything before or after that block - no introduction ("Here is the transcription…"), no explanation, and no closing remarks. Do not use a triple-backtick fence inside the record itself.
 ''';

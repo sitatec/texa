@@ -316,6 +316,28 @@ class _WorkerClient {
     final typeStr = type != null && type.isA<JSString>()
         ? (type as JSString).toDart
         : '';
+    if (typeStr == 'progress') {
+      // Progress is not a reply: it must only feed the progress
+      // callback and never complete the pending request. Falling
+      // through to the completion below once made initTts return (and
+      // start the warmup synthesis) while the worker was still loading
+      // the model, hence spurious "TTS not initialised" errors.
+      final callback = _progressCallbacks[id];
+      if (callback != null) {
+        final loaded = data.getProperty('loaded'.toJS);
+        final total = data.getProperty('total'.toJS);
+        if (loaded != null &&
+            loaded.isA<JSNumber>() &&
+            total != null &&
+            total.isA<JSNumber>()) {
+          final t = (total as JSNumber).toDartDouble;
+          if (t > 0) {
+            callback(((loaded as JSNumber).toDartDouble / t).clamp(0, 1));
+          }
+        }
+      }
+      return;
+    }
     if (typeStr == 'audio') {
       final wav = data.getProperty('wav'.toJS);
       if (wav != null && wav.isA<JSArrayBuffer>()) {

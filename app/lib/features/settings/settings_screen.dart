@@ -45,6 +45,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() => _logs = l);
   }
 
+  Future<void> _clearLogs() async {
+    await widget.app.db.clearLogs();
+    if (mounted) setState(() => _logs = '');
+  }
+
   @override
   void dispose() {
     _key.dispose();
@@ -191,8 +196,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     const Spacer(),
                     IconButton(
+                      tooltip: tr.common.delete,
+                      icon: const Icon(Symbols.delete),
+                      iconSize: 21.5,
+                      onPressed: _logs.isEmpty ? null : _clearLogs,
+                    ),
+                    IconButton(
                       tooltip: tr.common.save,
                       icon: const Icon(Symbols.content_copy),
+                      iconSize: 20,
                       onPressed: _logs.isEmpty
                           ? null
                           : () => Clipboard.setData(ClipboardData(text: _logs)),

@@ -6,7 +6,7 @@ let vad = null; let smartTurn = null;
 function configureOrt(wasmBaseUrl) {
   if (ort.env?.wasm) {
     if (wasmBaseUrl) ort.env.wasm.wasmPaths = wasmBaseUrl;
-    ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+    ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(2, navigator.hardwareConcurrency || 1) : 1;
   }
 }
 self.onmessage = async (e) => {
@@ -33,6 +33,7 @@ self.onmessage = async (e) => {
       self.postMessage({ type: 'smart-turn-result', id: msg.id, probability: r.probability, complete: r.complete, available: true });
     } else if (msg.type === 'reset') { vad?.reset(); }
   } catch (err) {
+    console.error(err);
     self.postMessage({ type: 'error', id: msg.id, forType: msg.type, message: String(err?.message ?? err) });
   }
 };

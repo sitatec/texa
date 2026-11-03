@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:texa/core/constants.dart';
 import 'package:texa/features/study_session/ai/ai_actions.dart';
 import 'package:texa/features/study_session/board/board_models.dart';
 import 'package:texa/features/study_session/board_controller.dart';
@@ -16,6 +17,15 @@ BoardElement _stroke(String id, List<Offset> points) => BoardElement(
 List<Offset> _line() => [for (var i = 0; i <= 10; i++) Offset(i * 20.0, 0)];
 
 void main() {
+  group('board position reporting', () {
+    test('describes a rect as a plain bbox', () {
+      final text = BoardController.describeBoardRect(
+        const Rect.fromLTWH(80, 60, 320, 180),
+      );
+      expect(text, 'bbox [80, 60, 400, 240]');
+    });
+  });
+
   group('erase undo/redo', () {
     test('one erase drag is exactly one undo step', () {
       final c = BoardController();
@@ -80,6 +90,20 @@ void main() {
 
     test('measurement uses the same font as the board renderer', () {
       expect(BoardController.boardTextStyle(30).fontFamily, 'GoogleSansFlex');
+    });
+
+    test('text that would run past the board bottom shrinks its font', () {
+      final c = BoardController();
+      // Six lines at font size 40 need ~276 units of height; only 100
+      // remain. The box must not grow past the board - the font shrinks.
+      final layout = c.textLayoutFor(
+        x: 60,
+        y: boardHeight - 100,
+        text: 'one\ntwo\nthree\nfour\nfive\nsix',
+        fontSize: 40,
+      );
+      expect(layout.fontSize, lessThan(40));
+      expect(layout.rect.bottom, lessThanOrEqualTo(boardHeight));
     });
 
     test('short text is one measured line, not the old fixed box', () async {

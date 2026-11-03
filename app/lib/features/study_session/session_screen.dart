@@ -6,7 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:flutter/services.dart';
 import 'package:texa/core/constants.dart';
-import 'package:texa/core/utils/fullscreen_manager.dart';
+import 'package:texa/core/utils/context_utils.dart';
+import 'package:texa/core/utils/fullscreen/fullscreen_manager.dart';
 import 'package:texa/core/widgets/texa_app_bar.dart';
 
 import '../../core/theme.dart';
@@ -41,6 +42,10 @@ class _SessionScreenState extends State<SessionScreen> {
   static bool _macHeadphonesNoticeShown = false;
   bool _strokeUndoPushed = false;
   bool _boardPointerActive = false;
+
+  /// True once the close-time board save has started, so the pop
+  /// interception below lets its own [Navigator.pop] through.
+  bool _closing = false;
   List<TexaLocalFile> _attachments = [];
 
   /// True while [_attachments] are staged on the controller for the next
@@ -128,6 +133,23 @@ class _SessionScreenState extends State<SessionScreen> {
     );
   }
 
+  /// Files already sent to the AI, recovered from the saved student
+  /// turns (the staged selection is cleared when a turn takes it).
+  /// Identical files sent more than once are listed once.
+  List<AiUpload> get _uploadedFiles {
+    final seen = <String>{};
+    final uploaded = <AiUpload>[];
+    for (final message in c.messages) {
+      if (message.role == 'ai') continue;
+      for (final upload in AiClient.uploadsOf(message)) {
+        final key =
+            '${upload.name}\u0000${upload.mimeType}\u0000${upload.base64 ?? upload.text ?? ''}';
+        if (seen.add(key)) uploaded.add(upload);
+      }
+    }
+    return uploaded;
+  }
+
   /// Once a turn takes the staged uploads, drop the visible selection so
   /// the same files are not staged (and sent) again on a later turn.
   void _onControllerChanged() {
@@ -179,250 +201,273 @@ class _SessionScreenState extends State<SessionScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: Listenable.merge([c, c.speaker.currentChunk]),
-      builder: (context, _) {
-        final compact = MediaQuery.sizeOf(context).width < 600;
-        return Scaffold(
-          appBar: _fullscreen
-              ? null
-              : TexaAppBar(
-                  height: 42,
-                  centerTitle: true,
-                  title: Text(
-                    c.session.title,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleMedium
-                        ?.copyWith(fontSize: 17),
-                  ),
-                  actions: [
-                    IconButton(
-                      tooltip: tr.session.history,
-                      iconSize: 22,
-                      icon: const Icon(Symbols.history),
-                      onPressed: _showHistory,
+    // Persist the board's final state before the route (and with it
+    // the board's render object) goes away: the home preview renders
+    // that saved snapshot, so closing only completes once it is on
+    // disk. SessionController.dispose also flushes, as a backstop.
+    return PopScope(
+      canPop: _closing,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop || _closing) return;
+        setState(() => _closing = true);
+        final navigator = Navigator.of(context);
+        await c.flushSave();
+        if (mounted) navigator.pop();
+      },
+      child: ListenableBuilder(
+        listenable: Listenable.merge([c, c.speaker.currentChunk]),
+        builder: (context, _) {
+          final compact = MediaQuery.sizeOf(context).width < 600;
+          return Scaffold(
+            appBar: _fullscreen
+                ? null
+                : TexaAppBar(
+                    height: 42,
+                    centerTitle: true,
+                    title: Text(
+                      c.session.title,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium
+                          ?.copyWith(fontSize: 17),
                     ),
-                  ],
-                ),
-          body: SafeArea(
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: LayoutBuilder(
-                    builder: (context, box) {
-                      c.board.viewportSize = Size(box.maxWidth, box.maxHeight);
-                      return InteractiveViewer(
-                        transformationController: c.board.transform,
-                        constrained: false,
-                        panEnabled: !_boardPointerActive,
-                        scaleEnabled: !_boardPointerActive,
-                        minScale: 0.08,
-                        maxScale: 4,
-                        boundaryMargin: const EdgeInsets.all(400),
-                        onInteractionStart: (_) => c.onManualCamera(),
-                        child: BoardView(
-                          controller: c.board,
-                          tool: _tool,
-                          penColor: _penColor,
-                          penWidth: _penWidth,
-                          captureKey: c.captureKey,
-                          onDrawPointerDown: () {
-                            if (!_boardPointerActive) {
-                              setState(() => _boardPointerActive = true);
-                            }
-                          },
-                          onDrawPointerUp: () {
-                            if (_boardPointerActive) {
-                              setState(() => _boardPointerActive = false);
-                            }
-                          },
-                          onStrokeCancel: () {
-                            _strokeUndoPushed = false;
-                            c.board.cancelActiveStroke();
-                          },
-                          onStrokeStart: () {
-                            c.onStudentDrawStart();
-                            _strokeUndoPushed = false;
-                          },
-                          onStrokeUpdate: (p) {
-                            if (!_strokeUndoPushed) {
-                              c.board.beginStudentChange();
-                              _strokeUndoPushed = true;
-                              final seed = BoardElementStroke.create(
-                                p,
-                                _penColor,
-                                _penWidth,
-                              );
-                              if (_tool == BoardTool.line) {
-                                c.board.addLine(seed);
-                              } else {
-                                c.board.addStroke(seed);
+                    actions: [
+                      IconButton(
+                        tooltip: tr.session.history,
+                        iconSize: 22,
+                        icon: const Icon(Symbols.history),
+                        onPressed: _showHistory,
+                      ),
+                    ],
+                  ),
+            body: SafeArea(
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: LayoutBuilder(
+                      builder: (context, box) {
+                        c.board.viewportSize = Size(
+                          box.maxWidth,
+                          box.maxHeight,
+                        );
+                        return InteractiveViewer(
+                          transformationController: c.board.transform,
+                          constrained: false,
+                          panEnabled: !_boardPointerActive,
+                          scaleEnabled: !_boardPointerActive,
+                          minScale: 0.08,
+                          maxScale: 4,
+                          boundaryMargin: const EdgeInsets.all(400),
+                          onInteractionStart: (_) => c.onManualCamera(),
+                          child: BoardView(
+                            controller: c.board,
+                            tool: _tool,
+                            penColor: _penColor,
+                            penWidth: _penWidth,
+                            captureKey: c.captureKey,
+                            onDrawPointerDown: () {
+                              if (!_boardPointerActive) {
+                                setState(() => _boardPointerActive = true);
                               }
-                            } else if (_tool == BoardTool.line) {
-                              c.board.updateLineEnd(p);
-                            } else {
-                              c.board.updateLastStroke(p);
-                            }
-                          },
-                          onStrokeEnd: () {
-                            _strokeUndoPushed = false;
-                            c.board.finishStroke();
-                            unawaited(c.flushSave());
-                          },
-                          onEraseStart: c.board.beginErase,
-                          onEraseEnd: c.board.endErase,
-                          onErase: (p) => c.board.eraseAt(p, _eraserWidth / 2),
+                            },
+                            onDrawPointerUp: () {
+                              if (_boardPointerActive) {
+                                setState(() => _boardPointerActive = false);
+                              }
+                            },
+                            onStrokeCancel: () {
+                              _strokeUndoPushed = false;
+                              c.board.cancelActiveStroke();
+                            },
+                            onStrokeStart: () {
+                              c.onStudentDrawStart();
+                              _strokeUndoPushed = false;
+                            },
+                            onStrokeUpdate: (p) {
+                              if (!_strokeUndoPushed) {
+                                c.board.beginStudentChange();
+                                _strokeUndoPushed = true;
+                                final seed = BoardElementStroke.create(
+                                  p,
+                                  _penColor,
+                                  _penWidth,
+                                );
+                                if (_tool == BoardTool.line) {
+                                  c.board.addLine(seed);
+                                } else {
+                                  c.board.addStroke(seed);
+                                }
+                              } else if (_tool == BoardTool.line) {
+                                c.board.updateLineEnd(p);
+                              } else {
+                                c.board.updateLastStroke(p);
+                              }
+                            },
+                            onStrokeEnd: () {
+                              _strokeUndoPushed = false;
+                              c.board.finishStroke();
+                              unawaited(c.flushSave());
+                            },
+                            onEraseStart: c.board.beginErase,
+                            onEraseEnd: c.board.endErase,
+                            onErase: (p) =>
+                                c.board.eraseAt(p, _eraserWidth / 2),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  Positioned(
+                    top: 4,
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 2,
                         ),
-                      );
-                    },
-                  ),
-                ),
-                Positioned(
-                  top: 4,
-                  left: 0,
-                  right: 0,
-                  child: Center(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.6),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: isMobile ? 6 : 8,
-                            height: isMobile ? 6 : 8,
-                            decoration: BoxDecoration(
-                              color:
-                                  c.statusKey == 'capturing' ||
-                                      c.statusKey == 'speaking' ||
-                                      c.statusKey.startsWith('action:')
-                                  ? texaGreen
-                                  : texaYellow,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            _statusText(),
-                            style: TextStyle(
-                              fontSize: isMobile ? 11 : 13,
-                              color: Colors.white,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                if (compact) ...[
-                  Align(
-                    alignment: .centerStart,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      child: IntrinsicHeight(child: _toolbar(compact)),
-                    ),
-                  ),
-                  Align(
-                    alignment: .centerEnd,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      child: IntrinsicHeight(child: _overlays(compact)),
-                    ),
-                  ),
-                ] else ...[
-                  Positioned(left: 10, top: 64, child: _toolbar(compact)),
-                  Positioned(right: 10, top: 64, child: _overlays(compact)),
-                ],
-                if (c.replyActive)
-                  Positioned(
-                    right: 8,
-                    bottom: 8,
-                    child: FilledButton.icon(
-                      onPressed: () => c.stopPlayback(),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: texaRed,
-                        visualDensity: .compact,
-                        padding: .symmetric(vertical: 2, horizontal: 8),
-                      ),
-                      icon: const Icon(Symbols.stop),
-                      label: Text(tr.session.stop),
-                    ),
-                  ),
-                if (!c.hasMicPermission && !c.micMuted)
-                  Positioned(
-                    left: 12,
-                    right: 12,
-                    bottom: 16,
-                    child: _hintCard(tr.session.drawOnlyHint),
-                  ),
-                if (c.errorMessage != null)
-                  Positioned(
-                    left: 12,
-                    right: 12,
-                    bottom: 16,
-                    child: Material(
-                      color: const Color(0xFFFFF1F2),
-                      borderRadius: BorderRadius.circular(14),
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.6),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
                         child: Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(Symbols.error_outline, color: texaRed),
-                            const SizedBox(width: 8),
-                            Expanded(child: Text(c.errorMessage!)),
-                            // Retry only exists while a failed turn is
-                            // actually kept for resending; failures after
-                            // a partial response (and pre-send failures)
-                            // keep no snapshot, so they show no button.
-                            if (c.canRetryTurn)
-                              TextButton(
-                                onPressed: () => unawaited(c.retryTurn()),
-                                child: Text(tr.session.retryTurn),
+                            Container(
+                              width: isMobile ? 6 : 8,
+                              height: isMobile ? 6 : 8,
+                              decoration: BoxDecoration(
+                                color:
+                                    c.statusKey == 'capturing' ||
+                                        c.statusKey == 'speaking' ||
+                                        c.statusKey.startsWith('action:')
+                                    ? texaGreen
+                                    : texaYellow,
+                                shape: BoxShape.circle,
                               ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              _statusText(),
+                              style: TextStyle(
+                                fontSize: isMobile ? 11 : 13,
+                                color: Colors.white,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
                           ],
                         ),
                       ),
                     ),
                   ),
-                if (c.captionsOn && c.speaker.currentChunk.value != null)
-                  Positioned(
-                    left: 14,
-                    right: 14,
-                    bottom: 16,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
+                  if (compact) ...[
+                    Align(
+                      alignment: .centerStart,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: IntrinsicHeight(child: _toolbar(compact)),
                       ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.84),
+                    ),
+                    Align(
+                      alignment: .centerEnd,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: IntrinsicHeight(child: _overlays(compact)),
+                      ),
+                    ),
+                  ] else ...[
+                    Positioned(left: 10, top: 64, child: _toolbar(compact)),
+                    Positioned(right: 10, top: 64, child: _overlays(compact)),
+                  ],
+                  if (c.replyActive)
+                    Positioned(
+                      right: 8,
+                      bottom: 8,
+                      child: FilledButton.icon(
+                        onPressed: () => c.stopPlayback(),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: texaRed,
+                          visualDensity: .compact,
+                          padding: .symmetric(
+                            vertical: 2,
+                            horizontal: context.isSmallScreen ? 8 : 10,
+                          ),
+                        ),
+                        icon: const Icon(Symbols.stop),
+                        label: Text(tr.session.stop),
+                      ),
+                    ),
+                  if (!c.hasMicPermission && !c.micMuted)
+                    Positioned(
+                      left: 12,
+                      right: 12,
+                      bottom: 16,
+                      child: _hintCard(tr.session.drawOnlyHint),
+                    ),
+                  if (c.errorMessage != null)
+                    Positioned(
+                      left: 12,
+                      right: 12,
+                      bottom: 16,
+                      child: Material(
+                        color: const Color(0xFFFFF1F2),
                         borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Text(
-                        c.speaker.currentChunk.value!,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 17,
-                          height: 1.3,
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Row(
+                            children: [
+                              const Icon(Symbols.error_outline, color: texaRed),
+                              const SizedBox(width: 8),
+                              Expanded(child: Text(c.errorMessage!)),
+                              // Retry only exists while a failed turn is
+                              // actually kept for resending; failures after
+                              // a partial response (and pre-send failures)
+                              // keep no snapshot, so they show no button.
+                              if (c.canRetryTurn)
+                                TextButton(
+                                  onPressed: () => unawaited(c.retryTurn()),
+                                  child: Text(tr.session.retryTurn),
+                                ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
-              ],
+                  if (c.captionsOn && c.speaker.currentChunk.value != null)
+                    Positioned(
+                      left: 14,
+                      right: 14,
+                      bottom: 16,
+                      child: Center(
+                        child: Container(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: context.isSmallScreen ? 2 : 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.84),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Text(
+                            c.speaker.currentChunk.value!,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 15,
+                              height: 1.3,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
@@ -530,7 +575,7 @@ class _SessionScreenState extends State<SessionScreen> {
           tooltip: tr.session.panTool,
           icon: Symbols.pan_tool,
           value: BoardTool.pan,
-          iconSize: 18,
+          iconSize: 17,
         ),
         toolButton(
           tooltip: tr.session.pen,
@@ -739,6 +784,7 @@ class _SessionScreenState extends State<SessionScreen> {
         icon: const Icon(Symbols.attach_file),
         onChanged: (files) => setState(() => _attachments = files),
         onModalClosed: _onUploadModalClosed,
+        uploadedFiles: _uploadedFiles,
       ),
       const SizedBox(height: 2),
       IconButton(

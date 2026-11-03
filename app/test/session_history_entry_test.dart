@@ -7,6 +7,15 @@ import 'package:texa/features/study_session/board/plot_preview.dart';
 import 'package:texa/features/study_session/session_history/session_history_entry.dart';
 import 'package:texa/generated/i18n/translations.g.dart';
 
+ChatMessage _studentMessage(Map<String, dynamic> payload) => ChatMessage(
+  id: 's1',
+  sessionId: 's1',
+  role: 'student',
+  kind: 'video-turn',
+  payloadJson: jsonEncode(payload),
+  createdAt: DateTime(2026),
+);
+
 ChatMessage _aiMessage(Map<String, dynamic> payload) => ChatMessage(
   id: 'm1',
   sessionId: 's1',
@@ -82,5 +91,44 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(Dialog), findsOneWidget);
     expect(find.text('f(x) = x^2'), findsNWidgets(2));
+  });
+
+  testWidgets('shows small previews of a student turn attachments', (
+    tester,
+  ) async {
+    // 1x1 transparent PNG.
+    const pngBase64 =
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+    await tester.pumpWidget(
+      TranslationProvider(
+        child: MaterialApp(
+          home: Scaffold(
+            body: SessionHistoryEntry(
+              message: _studentMessage({
+                'hasVideo': true,
+                'videoBase64': '',
+                'uploads': [
+                  {
+                    'name': 'diagram.png',
+                    'mimeType': 'image/png',
+                    'base64': pngBase64,
+                  },
+                  {
+                    'name': 'worksheet.pdf',
+                    'mimeType': 'application/pdf',
+                    'base64': 'PDF',
+                  },
+                ],
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('diagram.png'), findsOneWidget);
+    expect(find.text('worksheet.pdf'), findsOneWidget);
+    expect(find.byType(Image), findsOneWidget);
   });
 }

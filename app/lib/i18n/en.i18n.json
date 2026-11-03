@@ -130,6 +130,26 @@
     "@emptyBody": {
       "description": "Empty-state explanation on Home."
     },
+    "welcomeTitle": "Welcome to Texa",
+    "@welcomeTitle": {
+      "description": "Title of the one-time welcome dialog shown the first time Home renders."
+    },
+    "welcomeGuideTitle": "A tutor, not an answer machine",
+    "@welcomeGuideTitle": {
+      "description": "Heading of the welcome dialog section explaining that Texa guides rather than handing out solutions."
+    },
+    "welcomeGuideBody": "Texa is built to help you understand, not to do the thinking for you. Bring a problem and Texa will ask what you think, encourage you to try, and then guide you step by step with questions, hints and support until it clicks. You won't be handed a finished solution—but you'll come away able to solve the next problem yourself.",
+    "@welcomeGuideBody": {
+      "description": "Body of the welcome dialog section explaining that Texa guides rather than handing out solutions."
+    },
+    "welcomeQuietTitle": "Pick a quiet spot",
+    "@welcomeQuietTitle": {
+      "description": "Heading of the welcome dialog section asking for a quiet environment."
+    },
+    "welcomeQuietBody": "Texa learns by listening as you talk through your ideas, so background voices can be picked up too. Texa can usually tell your speech apart from unrelated voices, but telling them apart takes extra effort and slows its replies down. A quiet environment keeps the conversation quick and focused.",
+    "@welcomeQuietBody": {
+      "description": "Body of the welcome dialog section asking for a quiet environment, since background voices slow Texa down."
+    },
     "settings": "Settings",
     "@settings": {
       "description": "Settings button tooltip on Home."
@@ -198,6 +218,7 @@
     "@reasoningXHigh": {
       "description": "Reasoning effort option: xhigh."
     },
+    "reasoningDescription": "Lower reasoning efforts results in faster responses but may lead to errors in complex problems",
     "reasoningChip": "Reasoning: {effort}",
     "@reasoningChip": {
       "description": "Home session card chip showing the session reasoning effort."
@@ -452,6 +473,14 @@
       "noFilesYet": "No files selected yet. Choose an option above to add some.",
       "@noFilesYet": {
         "description": "Empty state in the upload modal grid."
+      },
+      "selectedFiles": "Selected files",
+      "@selectedFiles": {
+        "description": "Heading above the files selected in the upload modal but not sent yet."
+      },
+      "uploadedFiles": "Uploaded Files",
+      "@uploadedFiles": {
+        "description": "Heading above the files already sent to the AI in earlier turns, shown in the upload modal and as previews in the history sheet."
       },
       "filesAttached": "{count} file(s) attached",
       "@filesAttached": {

@@ -65,6 +65,7 @@ class VoiceEngineSelector extends StatelessWidget {
             padding: .symmetric(vertical: 2, horizontal: 8),
             decoration: BoxDecoration(
               border: Border.all(
+                width: 0.6,
                 color: Theme.of(context).colorScheme.onSurface
                     .withValues(alpha: 0.7),
               ),

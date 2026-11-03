@@ -8,6 +8,108 @@ enum BoardElementKind { stroke, text, math, svg, plot, landmark }
 
 enum BoardOwner { student, ai }
 
+/// Default curve colours, in assignment order, for plot series that do
+/// not specify their own colour. Shared by argument parsing and painting
+/// so a series keeps the same colour everywhere it is rendered.
+const plotSeriesPalette = <Color>[
+  Color(0xFF1F2937),
+  Color(0xFF3B82F6),
+  Color(0xFFE11D48),
+  Color(0xFF10B981),
+  Color(0xFF8B5CF6),
+  Color(0xFFF97316),
+];
+
+/// One function of x drawn on a plot element. A plot may hold several
+/// series so functions can be compared (and intersect) on shared axes.
+class PlotSeries {
+  const PlotSeries({required this.expression, this.color, this.label});
+
+  final String expression;
+  final Color? color;
+  final String? label;
+
+  String get displayLabel =>
+      (label != null && label!.trim().isNotEmpty) ? label!.trim() : expression;
+
+  Map<String, Object?> toJson() => {
+    'expr': expression,
+    'color': color?.toARGB32(),
+    'label': label,
+  };
+
+  factory PlotSeries.fromJson(Map<String, dynamic> j) => PlotSeries(
+    expression: (j['expr'] as String? ?? j['expression'] as String? ?? '')
+        .trim(),
+    color: j['color'] is int ? Color(j['color'] as int) : null,
+    label: j['label'] as String?,
+  );
+}
+
+/// Parses the functions of a `plot_function` call into plot series.
+///
+/// Accepts the multi-function form, `expressions`: a list of strings
+/// (`["x^2", "2*x+1"]`) or objects (`{"expression": "x^2", "color":
+/// "blue", "label": "f"}`), and the legacy single-function form,
+/// `expression` plus an optional `color`. Series without a colour get
+/// distinct palette colours so overlapping curves stay distinguishable.
+List<PlotSeries> plotSeriesFromArgs(
+  Map<String, dynamic> args, {
+  Color fallback = const Color(0xFF1F2937),
+}) {
+  final out = <PlotSeries>[];
+  void add(String? expression, String? colorName, Color? color, String? label) {
+    final expr = expression?.trim() ?? '';
+    if (expr.isEmpty) return;
+    out.add(
+      PlotSeries(
+        expression: expr,
+        color:
+            color ??
+            (colorName != null
+                ? colorFromName(
+                    colorName,
+                    plotSeriesPalette[out.length % plotSeriesPalette.length],
+                  )
+                // colorFromName returns its fallback for unknown names, so
+                // an unrecognised name still yields the palette colour.
+                : plotSeriesPalette[out.length % plotSeriesPalette.length]),
+        label: label,
+      ),
+    );
+  }
+
+  final raw = args['expressions'];
+  if (raw is List) {
+    for (final item in raw) {
+      if (item is String) {
+        add(item, null, null, null);
+      } else if (item is Map) {
+        final m = item.cast<String, dynamic>();
+        add(
+          (m['expression'] ?? m['expr']) as String?,
+          m['color'] as String?,
+          null,
+          m['label'] as String?,
+        );
+      }
+    }
+  }
+  if (out.isEmpty) {
+    final single = args['expression'] as String?;
+    if (single != null && single.trim().isNotEmpty) {
+      return [
+        PlotSeries(
+          expression: single.trim(),
+          color: colorFromName(args['color'] as String?, fallback),
+          label: args['label'] as String?,
+        ),
+      ];
+    }
+  }
+  return out;
+}
+
 /// One unified board element: student ink and AI content share this model.
 class BoardElement {
   BoardElement({
@@ -22,6 +124,7 @@ class BoardElement {
     this.latex,
     this.svg,
     this.expression,
+    this.series = const [],
     this.xMin,
     this.xMax,
     this.yMin,
@@ -37,10 +140,21 @@ class BoardElement {
   final BoardOwner owner;
   double x, y, width, height, size, strokeWidth, progress;
   String? text, latex, svg, expression;
+  List<PlotSeries> series;
   double? xMin, xMax, yMin, yMax;
   Color color;
   List<Offset> points;
   Rect get rect => Rect.fromLTWH(x, y, width, height);
+
+  /// Every function drawn on this plot: [series] when the element was
+  /// created with multiple functions, otherwise the single legacy
+  /// [expression]/[color] pair as a one-item list.
+  List<PlotSeries> get plotSeries => series.isNotEmpty
+      ? series
+      : [
+          if ((expression ?? '').trim().isNotEmpty)
+            PlotSeries(expression: expression!.trim(), color: color),
+        ];
   BoardElement copyWith({
     String? id,
     List<Offset>? points,
@@ -52,6 +166,7 @@ class BoardElement {
     String? latex,
     String? svg,
     String? expression,
+    List<PlotSeries>? series,
     double? progress,
   }) => BoardElement(
     id: id ?? this.id,
@@ -64,7 +179,12 @@ class BoardElement {
     text: text ?? this.text,
     latex: latex ?? this.latex,
     svg: svg ?? this.svg,
-    expression: expression ?? this.expression,
+    expression:
+        expression ??
+        (series != null && series.isNotEmpty
+            ? series.first.expression
+            : this.expression),
+    series: series ?? this.series,
     xMin: xMin,
     xMax: xMax,
     yMin: yMin,
@@ -87,6 +207,7 @@ class BoardElement {
     'latex': latex,
     'svg': svg,
     'expr': expression,
+    'series': series.map((s) => s.toJson()).toList(),
     'xMin': xMin,
     'xMax': xMax,
     'yMin': yMin,
@@ -108,6 +229,11 @@ class BoardElement {
     latex: j['latex'] as String?,
     svg: j['svg'] as String?,
     expression: j['expr'] as String?,
+    series: ((j['series'] as List?) ?? [])
+        .whereType<Map>()
+        .map((e) => PlotSeries.fromJson(e.cast<String, dynamic>()))
+        .where((s) => s.expression.isNotEmpty)
+        .toList(),
     xMin: (j['xMin'] as num?)?.toDouble(),
     xMax: (j['xMax'] as num?)?.toDouble(),
     yMin: (j['yMin'] as num?)?.toDouble(),
@@ -147,13 +273,45 @@ class BoardSnapshot {
     required this.elements,
     required this.viewport,
     required this.registry,
+    this.viewportSize = const [],
   });
   final List<BoardElement> elements;
+
+  /// The saved camera: `[scale, translationX, translationY]`, in the
+  /// coordinate space of the session viewport ([viewportSize]).
   final List<double> viewport;
   final Map<String, AiElementInfo> registry;
+
+  /// Size of the session viewport [viewport] was captured in, as
+  /// `[width, height]`. Without it the camera transform cannot be
+  /// reproduced in a differently sized view, so snapshots saved
+  /// before this was recorded have an empty list.
+  final List<double> viewportSize;
+
+  /// The camera transform saved with the board, ready to apply to a
+  /// board-sized child positioned at the viewport's top-left - the
+  /// same matrix [BoardController.restore] puts back into the
+  /// session's InteractiveViewer when the session is reopened.
+  Matrix4 get cameraTransform {
+    final scale = viewport.isNotEmpty && viewport[0] > 0 ? viewport[0] : 1.0;
+    final tx = viewport.length > 1 ? viewport[1] : 0.0;
+    final ty = viewport.length > 2 ? viewport[2] : 0.0;
+    return Matrix4.identity()
+      ..scaleByDouble(scale, scale, 1, 1)
+      ..setTranslationRaw(tx, ty, 0);
+  }
+
+  /// The size of the viewport [cameraTransform] was captured in, or
+  /// null for snapshots saved before it was recorded.
+  Size? get cameraViewportSize =>
+      viewportSize.length >= 2 && viewportSize[0] > 0 && viewportSize[1] > 0
+      ? Size(viewportSize[0], viewportSize[1])
+      : null;
+
   String encode() => jsonEncode({
     'elements': elements.map((e) => e.toJson()).toList(),
     'viewport': viewport,
+    'viewportSize': viewportSize,
     'registry': registry.values.map((e) => e.toJson()).toList(),
   });
   factory BoardSnapshot.decode(String? s) {
@@ -186,6 +344,9 @@ class BoardSnapshot {
       return BoardSnapshot(
         elements: els,
         viewport: ((j['viewport'] as List?) ?? [1, 0, 0])
+            .map((e) => (e as num).toDouble())
+            .toList(),
+        viewportSize: ((j['viewportSize'] as List?) ?? [])
             .map((e) => (e as num).toDouble())
             .toList(),
         registry: reg,

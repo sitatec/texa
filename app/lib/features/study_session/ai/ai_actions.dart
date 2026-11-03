@@ -142,7 +142,7 @@ List<Map<String, dynamic>> toolSchemas() {
     ),
     tool(
       'write_math',
-      'Write one LaTeX maths expression or one short step on the board. Formulas cannot wrap, so keep each call to a single short line and use a separate call for the next step.',
+      'Write one LaTeX maths expression or one short step on the board. Formulas cannot wrap, so keep each call to a single short line and use a separate call for the next step. If a formula is too wide for its board area the app shrinks its font to fit rather than enlarging the element, so splitting long workings into steps keeps them legible.',
       props(
         ['element_id', 'x', 'y', 'latex'],
         {
@@ -174,25 +174,39 @@ List<Map<String, dynamic>> toolSchemas() {
     ),
     tool(
       'plot_function',
-      'Plot an analytic function of x on-device.',
+      'Plot one or more analytic functions of x on-device, on shared axes. For a single function use expression. To plot several functions on the SAME plot (e.g. to compare them or show where they intersect) pass them all in ONE call via expressions - never make separate plot_function calls at the same position for that, as each separate plot gets its own axes and auto-scaled y-range so the curves would not be comparable. All functions in expressions share the same x/y ranges. Give each a distinct color and a short label for the legend (e.g. f, g), then use mark_landmarks with "intersections" on this element to mark exactly where they cross.',
       props(
-        [
-          'element_id',
-          'x',
-          'y',
-          'width',
-          'height',
-          'expression',
-          'x_min',
-          'x_max',
-        ],
+        ['element_id', 'x', 'y', 'width', 'height', 'x_min', 'x_max'],
         {
           'element_id': id,
           'x': num,
           'y': num,
           'width': num,
           'height': num,
-          'expression': str,
+          'expression': {
+            'type': 'string',
+            'description': 'Single function of x, e.g. "x^2-4". Use this OR expressions, not both.',
+          },
+          'expressions': {
+            'type': 'array',
+            'description': 'Two or more functions to draw together on this one plot. Prefer objects so each curve has its own colour and legend label.',
+            'items': {
+              'type': 'object',
+              'properties': {
+                'expression': {
+                  'type': 'string',
+                  'description': 'Function of x, e.g. "x^2-4".',
+                },
+                'color': str,
+                'label': {
+                  'type': 'string',
+                  'description': 'Short legend label, e.g. "f" or "g".',
+                },
+              },
+              'required': ['expression'],
+              'additionalProperties': false,
+            },
+          },
           'x_min': num,
           'x_max': num,
           'y_min': num,
@@ -204,7 +218,7 @@ List<Map<String, dynamic>> toolSchemas() {
     ),
     tool(
       'mark_landmarks',
-      'Mark exact landmark points on one of your existing elements. You supply only the element_id and landmark NAMES; the app computes the coordinates from the element itself and draws labelled markers. Never compute landmark coordinates yourself. Supported names: for plot_function: vertex (alias turning_point), root/roots, y_intercept, maximum, minimum; for SVG shapes: vertex/vertices, centroid, circumcenter, incenter, orthocenter, midpoint/midpoints; for any element: center, top_left, top_right, bottom_left, bottom_right.',
+      'Mark exact landmark points on one of your existing elements. You supply only the element_id and landmark NAMES; the app computes the coordinates from the element itself and draws labelled markers. Never compute landmark coordinates yourself. Supported names: for plot_function: vertex (alias turning_point), root/roots, y_intercept, maximum, minimum, and intersection/intersections (where the functions of a multi-function plot cross each other; other plot landmarks refer to the first function); for SVG shapes: vertex/vertices, centroid, circumcenter, incenter, orthocenter, midpoint/midpoints; for any element: center, top_left, top_right, bottom_left, bottom_right.',
       props(
         ['element_id', 'landmarks'],
         {
@@ -221,7 +235,7 @@ List<Map<String, dynamic>> toolSchemas() {
     ),
     tool(
       'edit_element',
-      'Move, resize or replace one of your own elements by element_id.',
+      'Move, resize, edit or replace one of the elements you have already written/drawn by element_id. Use the right parameter(s) based on the type of element.',
       props(
         ['element_id'],
         {
@@ -234,6 +248,16 @@ List<Map<String, dynamic>> toolSchemas() {
           'latex': str,
           'svg': str,
           'expression': str,
+          'expressions': {
+            'type': 'array',
+            'description': 'For a plot element: replacement functions of x to draw together on it, replacing its current functions. Items are objects with expression plus optional color/label, as in plot_function.',
+            'items': {
+              'type': 'object',
+              'properties': {'expression': str, 'color': str, 'label': str},
+              'required': ['expression'],
+              'additionalProperties': false,
+            },
+          },
           'explanation_speech': speech,
         },
       ),

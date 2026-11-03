@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:texa/core/utils/context_utils.dart';
 import 'package:texa/core/widgets/texa_logo.dart';
 
 class TexaAppBar extends StatelessWidget implements PreferredSizeWidget {
@@ -46,7 +47,7 @@ class TexaAppBar extends StatelessWidget implements PreferredSizeWidget {
         : Brightness.light;
     final canShowImplicitLeading =
         automaticallyImplyLeading && Navigator.canPop(context) == true;
-    final isSmallScreen = MediaQuery.sizeOf(context).width <= 600;
+    final isSmallScreen = context.isSmallScreen;
 
     return Center(
       child: ConstrainedBox(

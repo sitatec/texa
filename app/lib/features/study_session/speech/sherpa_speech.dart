@@ -134,7 +134,7 @@ class SherpaSpeech implements SpeechEngine {
         ),
         smartTurnConfig: sherpa.SmartTurnConfig(
           model: smartTurnPath,
-          maxSilenceDuration: 2.5,
+          maxSilenceDuration: 2.0,
         ),
         numThreads: 1,
         debug: kDebugMode,

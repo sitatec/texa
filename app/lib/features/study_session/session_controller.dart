@@ -99,6 +99,13 @@ class SessionController extends ChangeNotifier {
   /// from interleaving over the live, still-growing [messages] list.
   Future<void> _messageSaveChain = Future<void>.value();
 
+  /// Serializes board saves for the same reason: a debounced autosave
+  /// and the final flush on close can race, and an older capture
+  /// finishing last would leave a stale board (and preview) behind.
+  /// Each chained save snapshots the board when it runs, so the last
+  /// save queued always persists the board as it is at that moment.
+  Future<void> _boardSaveChain = Future<void>.value();
+
   Future<void> _saveMessages() {
     final snapshot = List<ChatMessage>.of(messages);
     final save = _messageSaveChain.then(
@@ -381,24 +388,18 @@ class SessionController extends ChangeNotifier {
     _saveTimer = Timer(const Duration(milliseconds: 450), _saveNow);
   }
 
-  Future<void> _saveNow() async {
-    String? thumb;
-    try {
-      final png = await captureBoardPng(pixelRatio: 0.12);
-      if (png != null) thumb = base64Encode(png);
-    } catch (_) {}
-    await db.saveBoard(session.id, board.snapshot(thumb).encode());
-    if (thumb != null) {
+  Future<void> _saveNow() {
+    final save = _boardSaveChain.then((_) async {
+      await db.saveBoard(session.id, board.snapshot(null).encode());
       final all = await db.loadSessions();
       final i = all.indexWhere((e) => e.id == session.id);
       if (i >= 0) {
-        all[i] = all[i].copyWith(
-          updatedAt: DateTime.now(),
-          thumbnailBase64: thumb,
-        );
+        all[i] = all[i].copyWith(updatedAt: DateTime.now());
         await db.saveSessions(all);
       }
-    }
+    });
+    _boardSaveChain = save.then((_) {}, onError: (_, _) {});
+    return save;
   }
 
   Future<void> flushSave() async {
@@ -654,7 +655,7 @@ class SessionController extends ChangeNotifier {
     }
     // Smart Turn: an apparently finished pause may be mid-thought.
     // Re-check a few times (bounded, ~2s) before ending the turn.
-    // Native SherpaVad always returns true here (silence decides).
+    // Native SherpaVad always returns true here (smart turn is backed into the vad for native).
     if (_vad != null && _smartTurnChecks < 4) {
       bool complete;
       try {
@@ -871,6 +872,11 @@ class SessionController extends ChangeNotifier {
     if (recordStudentMessage) {
       final studentPayload = <String, dynamic>{
         'hasVideo': true,
+        // Attachments sent with this turn, kept so the attachments
+        // modal and the history sheet can show what the student sent
+        // after the staged selection itself has been cleared.
+        if (turn.uploads.isNotEmpty)
+          'uploads': [for (final upload in turn.uploads) upload.toJson()],
         // Kept (base64, like thumbnails) so the history can replay the
         // turn video locally. On the wire the newest few are resent as
         // video when history is replayed; older ones are replaced by
@@ -1073,7 +1079,7 @@ class SessionController extends ChangeNotifier {
   }
 
   /// True while everything streamed so far could still turn out to be
-  /// (only) a control sentinel - <[IGNORE_TURN]> or <[TURN_DONE]> - so
+  /// (only) a control sentinel - <[IGNORE_TURN]> - so
   /// none of it may reach the speech splitter yet. Covers the whole
   /// sentinel, a prefix of it (split across deltas), and real text
   /// ending in a partial sentinel fragment, which must be held back
@@ -1112,6 +1118,12 @@ class SessionController extends ChangeNotifier {
     _producerDone = false;
     _playbackCancelled = false;
     _playing = true;
+    // A new reply reclaims the camera: cameraTakenByStudent is only
+    // meant to stop the AI fighting the student *within* a reply (it
+    // is set again by any manual pan/zoom/draw while this reply plays).
+    // Left sticky, the first manual camera move of the session would
+    // silently disable framing for every later reply.
+    board.cameraTakenByStudent = false;
     // Nothing of this turn's reply has arrived yet; the first text or
     // tool call flips this, and _sendCapturedTurn uses it to decide
     // whether a failure may offer a retry (see _reportTurnFailure).
@@ -1125,12 +1137,12 @@ class SessionController extends ChangeNotifier {
     final generation = _playbackGeneration;
     final consumer = _consumeQueue(generation);
 
-    // Performs one tool call the model asked for and reports the outcome
-    // back to it. Board/notebook actions go through the playback queue
-    // (so speech and drawing stay in the order the model issued them)
-    // and the future only completes when the consumer has actually
-    // performed the action; the AI client then sends that result to the
-    // model before asking it for the next step.
+    // Performs one tool call the model asked for. Board/notebook
+    // actions go through the playback queue (so speech and drawing
+    // stay in the order the model issued them) and the future only
+    // completes when the consumer has actually performed the action;
+    // the AI client persists that outcome with the turn and only
+    // sends it back to the model when a call failed.
     Future<AiToolResult> executeToolCall(
       String name,
       Map<String, dynamic> args,
@@ -1228,8 +1240,8 @@ class SessionController extends ChangeNotifier {
           for (final s in splitter.flush()) {
             _queue.add(TextItem(s));
           }
-          // Performing the call (and reporting its outcome to the model)
-          // is executeToolCall's job, above; here we only keep the
+          // Performing the call (and recording its outcome) is
+          // executeToolCall's job, above; here we only keep the
           // surrounding text flowing to playback in order.
         } else if (event is AiStreamDone) {
           rawText = event.fullText;
@@ -1434,8 +1446,9 @@ class SessionController extends ChangeNotifier {
   }
 
   /// Performs one board/notebook action and reports whether it actually
-  /// happened, so the outcome can be sent back to the model as the tool
-  /// result (instead of the model assuming every call succeeded).
+  /// happened, so the outcome can be persisted as the tool result (and
+  /// sent back to the model when the action failed, instead of the
+  /// model assuming every call succeeded).
   Future<AiToolResult> _executeAction(ActionItem item) async {
     if (item.tool == 'update_session_observation' ||
         item.tool == 'update_memory') {
@@ -1493,6 +1506,14 @@ class SessionController extends ChangeNotifier {
     applied = await actionFuture;
     if (speech != null && speech.isNotEmpty) await speaker.drained;
     if (!animDone) await animate();
+    // The pre-action framing above used the rect predicted from the
+    // raw arguments; the applied rect is the truth (text is measured,
+    // edits may have moved/resized the element, landmarks land where
+    // they land). Frame it if the prediction missed it, otherwise the
+    // new content can end up off-screen with no camera move at all.
+    if (applied != null && item.tool != 'remove_element') {
+      await board.frameRectUnlessCovered(applied, rect);
+    }
     if (applied != null) {
       _queue.completed.add({
         'tool': item.tool,
@@ -1502,15 +1523,38 @@ class SessionController extends ChangeNotifier {
     }
     _scheduleSave();
     return applied != null
-        ? AiToolResult.success(
-            '${item.tool} performed on the board at '
-            '${applied.left.round()},${applied.top.round()} '
-            '(${applied.width.round()}x${applied.height.round()}).',
-          )
+        ? AiToolResult.success(_boardActionResultText(item, applied))
         : AiToolResult.failure(
             '${item.tool} could not be performed: check the element_id, '
             'the arguments, and that the target element exists.',
           );
+  }
+
+  /// The success result of a board action: just the element and its
+  /// bounding box on the board (see
+  /// [BoardController.describeBoardRect]). The element's own stored
+  /// rect is preferred over the rect applyAction returned, since text
+  /// is re-measured and edited elements may have moved. These outputs
+  /// are persisted and replayed with later turns, so over a session
+  /// the bboxes accumulate into the model's map of what is where -
+  /// that is what lets it place the next element in free space
+  /// instead of overwriting something.
+  String _boardActionResultText(ActionItem item, Rect applied) {
+    final id = item.elementId;
+    var rect = applied;
+    if (id != null && item.tool != 'remove_element') {
+      final el = board.elements.where((e) => e.id == id).firstOrNull;
+      if (el != null) rect = el.rect;
+    }
+    final bbox = BoardController.describeBoardRect(rect);
+    final named = id == null ? item.tool : "${item.tool} '$id'";
+    return switch (item.tool) {
+      'remove_element' => '$named removed, $bbox now free.',
+      'point_at' => '$named pointed at $bbox.',
+      'focus_viewport' => '$named framed $bbox.',
+      'mark_landmarks' => '$named marked $bbox.',
+      _ => '$named placed, $bbox.',
+    };
   }
 
   // ---------- Interruption ----------
@@ -1573,6 +1617,9 @@ class SessionController extends ChangeNotifier {
     final s = _suspended;
     if (s == null) return;
     _suspended = null;
+    // The resumed explanation continues on the board; show its actions
+    // again (a fresh manual move during it re-takes the camera).
+    board.cameraTakenByStudent = false;
     _queue = PlaybackQueue()..addAll(s.remaining);
     _producerDone = true;
     _playbackCancelled = false;
