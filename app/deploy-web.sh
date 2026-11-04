@@ -27,7 +27,7 @@ echo "Deploying release $VERSION..."
 
 cd web/texa-webspeech && npm run build && cd ../../
 
-flutter build web --release --wasm --dart-define=WASM_BASE_URL=https://cdn.jsdelivr.net/npm/onnxruntime-web@[VERSION]/dist/
+flutter build web --release --wasm --dart-define=WASM_BASE_URL=https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/
 
 # sherpa_onnx is not used in web so delete its heavy wasm files to reduce web startup time.
 rm -rf build/web/assets/packages/sherpa_onnx_web

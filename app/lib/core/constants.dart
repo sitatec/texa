@@ -57,12 +57,15 @@ const String piperBaseUrl = String.fromEnvironment(
 );
 const String sileroVadModelUrl = String.fromEnvironment(
   'SILERO_VAD_MODEL_URL',
-  defaultValue: 'https://github.com/snakers4/silero-vad/raw/bfdc0193023f121ea5b3cc7b176dbed570a68a59/src/silero_vad/data/silero_vad.onnx',
+  defaultValue: 'https://huggingface.co/sitatech/Smart-Turn-v3.2-ONNX/resolve/main/silero_vad.onnx',
 );
 const String smartTurnModelUrl = String.fromEnvironment(
   'SMART_TURN_MODEL_URL',
-  defaultValue: 'https://huggingface.co/soniqo/Smart-Turn-v3.2-ONNX/resolve/main/smart-turn-v3.2-int8.onnx',
+  defaultValue: 'https://huggingface.co/sitatech/Smart-Turn-v3.2-ONNX/resolve/main/smart-turn-v3.2-int8.onnx',
 );
+
+const wasmBaseUrl = String.fromEnvironment('WASM_BASE_URL');
+
 Color colorFromName(String? name, Color fallback) {
   switch (name?.toLowerCase()) {
     case 'red':
