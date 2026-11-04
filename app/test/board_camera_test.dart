@@ -38,6 +38,83 @@ void main() {
     },
   );
 
+  test('rectForArgs unions multiple element_ids for focus_viewport', () async {
+    final c = controller();
+    for (final (id, x, y) in [('a', 100.0, 100.0), ('b', 500.0, 400.0)]) {
+      await c.applyAction(
+        ActionItem('write_text', {
+          'element_id': id,
+          'x': x,
+          'y': y,
+          'text': 'Hi',
+        }),
+        animate: () async {},
+      );
+    }
+    final a = c.elements.firstWhere((e) => e.id == 'a').rect;
+    final b = c.elements.firstWhere((e) => e.id == 'b').rect;
+    final union = c.rectForArgs({
+      'element_ids': ['a', 'b', 'missing'],
+    });
+    expect(union, a.expandToInclude(b));
+    // A multi-element focus through applyAction frames that union.
+    expect(
+      await c.applyAction(
+        ActionItem('focus_viewport', {
+          'element_ids': ['a', 'b'],
+        }),
+        animate: () async {},
+      ),
+      a.expandToInclude(b),
+    );
+  });
+
+  test('plot_function schema has expressions only, no expression', () {
+    final schemas = toolSchemas();
+    final plot =
+        schemas.firstWhere((t) => (t as Map)['name'] == 'plot_function') as Map;
+    final params = plot['parameters'] as Map;
+    final propsMap = params['properties'] as Map;
+    expect(propsMap.containsKey('expression'), isFalse);
+    expect(propsMap.containsKey('expressions'), isTrue);
+    expect((params['required'] as List), contains('expressions'));
+    final focus = schemas.firstWhere(
+      (t) => (t as Map)['name'] == 'focus_viewport',
+    ) as Map;
+    final focusProps = ((focus['parameters'] as Map)['properties'] as Map);
+    expect(focusProps.containsKey('element_ids'), isTrue);
+  });
+
+  test('camera interpolation pans straight and zooms monotonically', () {
+    const viewport = Size(800, 600);
+    // Start centred on (200, 200) at scale 0.5.
+    final start = BoardController.cameraMatrixAt(
+      start: Matrix4.identity(),
+      viewportSize: viewport,
+      targetCenter: const Offset(200, 200),
+      targetScale: 0.5,
+      t: 1,
+    );
+    final mid = BoardController.cameraMatrixAt(
+      start: start,
+      viewportSize: viewport,
+      targetCenter: const Offset(1000, 700),
+      targetScale: 2.0,
+      t: 0.5,
+    );
+    // Half-way, the viewed centre is the straight midpoint and the
+    // scale is the geometric mean (already zooming in, never out).
+    final translation = mid.getTranslation();
+    final midScale = mid.storage[0];
+    final midCenter = Offset(
+      (viewport.width / 2 - translation.x) / midScale,
+      (viewport.height / 2 - translation.y) / midScale,
+    );
+    expect(midCenter.dx, closeTo(600, 0.001));
+    expect(midCenter.dy, closeTo(450, 0.001));
+    expect(midScale, closeTo(1.0, 0.001));
+  });
+
   test('frameRect does nothing while the student has the camera', () async {
     final c = controller();
     c.cameraTakenByStudent = true;
@@ -69,6 +146,46 @@ void main() {
         framed,
       );
       expect(c.transform.value, isNot(before));
+    },
+  );
+
+  test(
+    'frameRectUnlessCovered skips when applied rect already visible',
+    () async {
+      final c = controller();
+      // Frame a large predicted rect first (one camera move).
+      await c.frameRect(const Rect.fromLTWH(100, 100, 400, 300));
+      final before = c.transform.value.clone();
+      // A smaller applied rect inside that framing needs no second move,
+      // even though it overlaps the *raw* predicted rect by <50% is not
+      // the criterion - being comfortably on screen is.
+      await c.frameRectUnlessCovered(
+        const Rect.fromLTWH(180, 180, 60, 40),
+        const Rect.fromLTWH(100, 100, 400, 300),
+        source: 'test',
+      );
+      expect(c.transform.value, before);
+    },
+  );
+
+  test(
+    'a second frameRect supersedes the first instead of fighting it',
+    () async {
+      final c = controller();
+      final first = c.frameRect(
+        const Rect.fromLTWH(100, 100, 200, 100),
+        source: 'first',
+      );
+      // Let the first animation get under way, then retarget.
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      final second = c.frameRect(
+        const Rect.fromLTWH(1200, 900, 200, 100),
+        source: 'second',
+      );
+      await Future.wait([first, second]);
+      // Camera ends at the second target, not pulled back to the first.
+      final visible = c.visibleBoardRect();
+      expect(visible.contains(const Offset(1300, 950)), isTrue);
     },
   );
 }

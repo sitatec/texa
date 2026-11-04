@@ -112,4 +112,14 @@ void main() {
     expect(el.plotSeries.length, 2);
     expect(el.plotSeries[1].displayLabel, 'g');
   });
+
+  test('ticks are every 1 unit for classroom-sized ranges', () {
+    expect(plotTickStep(7.5), 1);
+    expect(plotTicks(-2, 5), [-2, -1, 0, 1, 2, 3, 4, 5]);
+    expect(plotTicks(-2.5, 7.3), [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7]);
+    // Wider ranges widen the step instead of crowding the axis.
+    expect(plotTickStep(100), 10);
+    expect(plotTickLabel(3, 1), '3');
+    expect(plotTickLabel(0.5, 0.5), '0.5');
+  });
 }

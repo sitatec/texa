@@ -535,9 +535,21 @@ void _paintStroke(Canvas canvas, BoardElement e) {
 }
 
 class _BoardPainter extends CustomPainter {
-  _BoardPainter(this.elements, this.revision);
+  _BoardPainter(this.elements, this.revision)
+    : _progresses = [for (final e in elements) e.progress];
   final List<BoardElement> elements;
   final int revision;
+
+  /// Entrance progress of each element, snapshotted at construction.
+  /// Elements are mutated in place, so the previous painter holds the
+  /// same objects and comparing their live progress would always look
+  /// unchanged; comparing snapshots is what lets a progress-only
+  /// update (an element fading/drawing in, with no structural board
+  /// change and no revision bump) actually repaint. Without it the
+  /// canvas could stay stuck at a transient progress - e.g. a plot
+  /// whose curves were painted at progress ~0 stays erased even
+  /// after its progress returns to 1.
+  final List<double> _progresses;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -597,5 +609,11 @@ class _BoardPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _BoardPainter old) =>
-      old.revision != revision || !identical(old.elements, elements);
+      old.revision != revision ||
+      !identical(old.elements, elements) ||
+      old._progresses.length != _progresses.length ||
+      [
+        for (var i = 0; i < _progresses.length; i++)
+          if (old._progresses[i] != _progresses[i]) i,
+      ].isNotEmpty;
 }

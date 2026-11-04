@@ -10,7 +10,9 @@ const _diskCacheMaxSize = 100 * 1024 * 1024; // 100 MB
 Directory? _cacheDir;
 
 Future<void> setupInternal() async {
-  _cacheDir = await getApplicationCacheDirectory();
+  if (Platform.isAndroid) {
+    _cacheDir = await getApplicationCacheDirectory();
+  }
 }
 
 Client createHttpClient({String? userAgent}) {

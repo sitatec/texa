@@ -61,6 +61,16 @@ class PlotPainter extends CustomPainter {
         axis,
       );
     }
+    _paintTicks(
+      canvas,
+      rect,
+      mx: mx,
+      my: my,
+      xMin: xMin,
+      xMax: xMax,
+      yMin: sampled.yMin,
+      yMax: sampled.yMax,
+    );
     canvas.drawRect(
       rect,
       Paint()
@@ -68,6 +78,13 @@ class PlotPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.5,
     );
+    // Clip - do NOT clamp: clamping an out-of-range y to the range
+    // edge bent straight lines flat along the top/bottom border
+    // until they re-entered (the "bend at the corner" in reports).
+    // Mapping the true point and clipping the canvas instead lets a
+    // line leave through the border at its real angle.
+    canvas.save();
+    canvas.clipRect(rect);
     for (var s = 0; s < sampled.curves.length; s++) {
       final points = sampled.curves[s];
       final paint = Paint()
@@ -87,7 +104,7 @@ class PlotPainter extends CustomPainter {
           penDown = false;
           continue;
         }
-        final o = Offset(mx(p.dx), my(p.dy.clamp(sampled.yMin, sampled.yMax)));
+        final o = Offset(mx(p.dx), my(p.dy));
         if (!penDown) {
           path.moveTo(o.dx, o.dy);
           penDown = true;
@@ -97,28 +114,83 @@ class PlotPainter extends CustomPainter {
       }
       canvas.drawPath(path, paint);
     }
+    canvas.restore();
+    // Frame again over the clipped curves so an exiting line never
+    // paints over the border.
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..color = const Color(0xFFD1D5DB)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5,
+    );
     if (series.length > 1) _paintLegend(canvas, rect, series);
-    final labelStyle = const TextStyle(color: Color(0xFF6B7280), fontSize: 20);
-    for (final (text, pos) in [
-      (
-        xMin.toStringAsFixed(xMin % 1 == 0 ? 0 : 1),
-        Offset(rect.left, rect.bottom + 4),
-      ),
-      (
-        xMax.toStringAsFixed(xMax % 1 == 0 ? 0 : 1),
-        Offset(rect.right - 44, rect.bottom + 4),
-      ),
-      (sampled.yMax.toStringAsFixed(1), Offset(rect.left + 4, rect.top)),
-      (
-        sampled.yMin.toStringAsFixed(1),
-        Offset(rect.left + 4, rect.bottom - 26),
-      ),
-    ]) {
+    // No range-end labels (the former big -2 / 5 / 7.0 / -1.0 corner
+    // numbers): the tick bars + their values now carry the reference,
+    // and the oversized corner labels stood out enough to look like
+    // specially-marked points. Tick labels therefore include the
+    // range ends (see _paintTicks).
+  }
+
+  /// Small tick bars (usually every 1 unit) plus their values, on the
+  /// zero axes when those are inside the plot and on the frame edge
+  /// otherwise - without them a point's coordinates cannot be read
+  /// off the curve, only the corner extremes were labelled before.
+  void _paintTicks(
+    Canvas canvas,
+    Rect rect, {
+    required double Function(double) mx,
+    required double Function(double) my,
+    required double xMin,
+    required double xMax,
+    required double yMin,
+    required double yMax,
+  }) {
+    final tickPaint = Paint()
+      ..color = const Color(0xFF9CA3AF)
+      ..strokeWidth = 1.5;
+    const labelStyle = TextStyle(color: Color(0xFF6B7280), fontSize: 13);
+    final xZeroInside = yMin < 0 && yMax > 0;
+    final yZeroInside = xMin < 0 && xMax > 0;
+    final xAxisY = xZeroInside ? my(0) : rect.bottom;
+    final yAxisX = yZeroInside ? mx(0) : rect.left;
+    final xStep = plotTickStep(xMax - xMin);
+    final yStep = plotTickStep(yMax - yMin);
+
+    for (final v in plotTicks(xMin, xMax)) {
+      final x = mx(v);
+      final from = xZeroInside ? xAxisY - 5 : rect.bottom - 10;
+      final to = xZeroInside ? xAxisY + 5 : rect.bottom;
+      canvas.drawLine(Offset(x, from), Offset(x, to), tickPaint);
+      // The origin label would collide with the y-axis labels.
+      if (v == 0) continue;
+      final text = plotTickLabel(v, xStep);
       final tp = TextPainter(
         text: TextSpan(text: text, style: labelStyle),
         textDirection: TextDirection.ltr,
       )..layout();
-      tp.paint(canvas, pos);
+      final lx = (x - tp.width / 2).clamp(rect.left, rect.right - tp.width);
+      final ly = xZeroInside
+          ? math.min(xAxisY + 6, rect.bottom - tp.height - 2)
+          : rect.bottom - tp.height - 12;
+      tp.paint(canvas, Offset(lx.toDouble(), ly));
+    }
+    for (final v in plotTicks(yMin, yMax)) {
+      final y = my(v);
+      final from = yZeroInside ? yAxisX - 5 : rect.left;
+      final to = yZeroInside ? yAxisX + 5 : rect.left + 10;
+      canvas.drawLine(Offset(from, y), Offset(to, y), tickPaint);
+      if (v == 0) continue;
+      final text = plotTickLabel(v, yStep);
+      final tp = TextPainter(
+        text: TextSpan(text: text, style: labelStyle),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final lx = yZeroInside
+          ? math.max(rect.left + 2, yAxisX - tp.width - 8)
+          : rect.left + 12;
+      final ly = (y - tp.height / 2).clamp(rect.top, rect.bottom - tp.height);
+      tp.paint(canvas, Offset(lx, ly.toDouble()));
     }
   }
 

@@ -26,6 +26,97 @@ ChatMessage _aiMessage(Map<String, dynamic> payload) => ChatMessage(
 );
 
 void main() {
+  testWidgets('renders text and actions in turn order, not merged', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      TranslationProvider(
+        child: MaterialApp(
+          home: Scaffold(
+            body: SessionHistoryEntry(
+              message: _aiMessage({
+                'text': 'Before text. After text.',
+                'items': [
+                  {'kind': 'text', 'text': 'Before text.'},
+                  {
+                    'kind': 'toolCall',
+                    'id': 'call_1',
+                    'name': 'write_text',
+                    'args': {'element_id': 'title', 'text': 'Quadratic'},
+                    'status': 'success',
+                    'output': '{"status":"success"}',
+                  },
+                  {'kind': 'text', 'text': 'After text.'},
+                ],
+                'toolCalls': [
+                  {
+                    'id': 'call_1',
+                    'name': 'write_text',
+                    'args': {'element_id': 'title', 'text': 'Quadratic'},
+                    'status': 'success',
+                  },
+                ],
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final before = tester.getCenter(find.text('Before text.')).dy;
+    final action = tester.getCenter(find.text('Quadratic')).dy;
+    final after = tester.getCenter(find.text('After text.')).dy;
+    expect(before < action, isTrue);
+    expect(action < after, isTrue);
+    // The merged aggregate text block must not also be rendered.
+    expect(find.text('Before text. After text.'), findsNothing);
+  });
+
+  testWidgets('shows explanation_speech above the element it produced', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      TranslationProvider(
+        child: MaterialApp(
+          home: Scaffold(
+            body: SessionHistoryEntry(
+              message: _aiMessage({
+                'text': '',
+                'items': [
+                  {
+                    'kind': 'toolCall',
+                    'id': 'call_1',
+                    'name': 'write_text',
+                    'args': {
+                      'element_id': 'title',
+                      'text': 'Quadratic',
+                      'explanation_speech': 'Let us start with the title.',
+                    },
+                    'status': 'success',
+                  },
+                ],
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final speech = find.text('Let us start with the title.');
+    expect(speech, findsOneWidget);
+    // Speech sits above the element content it accompanied.
+    expect(
+      tester.getCenter(speech).dy < tester.getCenter(find.text('Quadratic')).dy,
+      isTrue,
+    );
+  });
+
   testWidgets('shows labelled actions with their rendered content', (
     tester,
   ) async {

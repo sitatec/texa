@@ -264,9 +264,9 @@ class Translations$home$en {
 
   /// Body of the welcome dialog section explaining that Texa guides rather than handing out solutions.
   ///
-  /// en: 'Texa is built to help you understand, not to do the thinking for you. Bring a problem and Texa will ask what you think, encourage you to try, and then guide you step by step with questions, hints and support until it clicks. You won't be handed a finished solution—but you'll come away able to solve the next problem yourself.'
+  /// en: 'Texa is built to help you understand, not to do the thinking for you. Bring a problem and Texa will ask what you think, encourage you to try, and then guide you step by step with questions, hints and support until it clicks. For now, it is best to bring a problem you already have the solution to, but do not yet understand how to solve—so you can check Texa's guidance against that solution. You won't be handed a finished solution—but you'll come away able to solve the next problem yourself.'
   String get welcomeGuideBody =>
-      'Texa is built to help you understand, not to do the thinking for you. Bring a problem and Texa will ask what you think, encourage you to try, and then guide you step by step with questions, hints and support until it clicks. You won\'t be handed a finished solution—but you\'ll come away able to solve the next problem yourself.';
+      'Texa is built to help you understand, not to do the thinking for you. Bring a problem and Texa will ask what you think, encourage you to try, and then guide you step by step with questions, hints and support until it clicks. For now, it is best to bring a problem you already have the solution to, but do not yet understand how to solve—so you can check Texa\'s guidance against that solution. You won\'t be handed a finished solution—but you\'ll come away able to solve the next problem yourself.';
 
   /// Heading of the welcome dialog section asking for a quiet environment.
   ///
@@ -275,9 +275,9 @@ class Translations$home$en {
 
   /// Body of the welcome dialog section asking for a quiet environment, since background voices slow Texa down.
   ///
-  /// en: 'Texa learns by listening as you talk through your ideas, so background voices can be picked up too. Texa can usually tell your speech apart from unrelated voices, but telling them apart takes extra effort and slows its replies down. A quiet environment keeps the conversation quick and focused.'
+  /// en: 'Texa listens as you talk through your ideas, so background voices can be picked up too. Texa can usually tell your speech apart from unrelated voices, but it slows communication. A quiet environment keeps the conversation quick and focused. Avoid taking long pauses while speaking otherwise the Texa will think you are don't speaking and will start replying.'
   String get welcomeQuietBody =>
-      'Texa learns by listening as you talk through your ideas, so background voices can be picked up too. Texa can usually tell your speech apart from unrelated voices, but telling them apart takes extra effort and slows its replies down. A quiet environment keeps the conversation quick and focused.';
+      'Texa listens as you talk through your ideas, so background voices can be picked up too. Texa can usually tell your speech apart from unrelated voices, but it slows communication. A quiet environment keeps the conversation quick and focused.\nAvoid taking long pauses while speaking otherwise the Texa will think you are don\'t speaking and will start replying.';
 
   /// Settings button tooltip on Home.
   ///
@@ -929,9 +929,9 @@ extension on Translations {
       'home.emptyBody' => 'Drop in a document, snap a photo of your problem,\nor sketch it directly on the board—then work through it with Texa.',
       'home.welcomeTitle' => 'Welcome to Texa',
       'home.welcomeGuideTitle' => 'A tutor, not an answer machine',
-      'home.welcomeGuideBody' => 'Texa is built to help you understand, not to do the thinking for you. Bring a problem and Texa will ask what you think, encourage you to try, and then guide you step by step with questions, hints and support until it clicks. You won\'t be handed a finished solution—but you\'ll come away able to solve the next problem yourself.',
+      'home.welcomeGuideBody' => 'Texa is built to help you understand, not to do the thinking for you. Bring a problem and Texa will ask what you think, encourage you to try, and then guide you step by step with questions, hints and support until it clicks. For now, it is best to bring a problem you already have the solution to, but do not yet understand how to solve—so you can check Texa\'s guidance against that solution. You won\'t be handed a finished solution—but you\'ll come away able to solve the next problem yourself.',
       'home.welcomeQuietTitle' => 'Pick a quiet spot',
-      'home.welcomeQuietBody' => 'Texa learns by listening as you talk through your ideas, so background voices can be picked up too. Texa can usually tell your speech apart from unrelated voices, but telling them apart takes extra effort and slows its replies down. A quiet environment keeps the conversation quick and focused.',
+      'home.welcomeQuietBody' => 'Texa listens as you talk through your ideas, so background voices can be picked up too. Texa can usually tell your speech apart from unrelated voices, but it slows communication. A quiet environment keeps the conversation quick and focused.\nAvoid taking long pauses while speaking otherwise the Texa will think you are don\'t speaking and will start replying.',
       'home.settings' => 'Settings',
       'home.deleteSessionTitle' => 'Delete this session?',
       'home.deleteSessionBody' => 'Its board and history will be permanently deleted from this device.',

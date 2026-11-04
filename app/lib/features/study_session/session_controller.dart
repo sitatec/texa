@@ -20,6 +20,7 @@ import 'playback/speech_chunker.dart';
 import 'playback/tts_service.dart';
 import 'speech/speech_engine.dart';
 import 'board_controller.dart';
+import 'debug_log.dart';
 import 'turn_video_encoder/pcm_second_buffer.dart';
 import 'turn_video_encoder/turn_video_encoder.dart';
 
@@ -36,7 +37,23 @@ class SessionController extends ChangeNotifier {
     required this.speech,
     required this.vadPath,
     this.smartTurnPath,
-  }) : speaker = SpeechSpeaker(synthesise: speech.synthesise);
+  }) : speaker = SpeechSpeaker(synthesise: speech.synthesise) {
+    // Route AiClient/board/speech diagnostics into the persisted
+    // debug log as well as the console, serialised so concurrent
+    // lines cannot interleave the read-modify-write in appendLog.
+    texaDiagSink = _diagSink;
+  }
+
+  Future<void> _diagLogChain = Future<void>.value();
+
+  void _appendDiagLog(String line) {
+    _diagLogChain = _diagLogChain.then(
+      (_) => db.appendLog(line),
+      onError: (_, _) {},
+    );
+  }
+
+  late final void Function(String line) _diagSink = _appendDiagLog;
   final AppDb db;
   Session session;
   AppSettings settings;
@@ -88,8 +105,9 @@ class SessionController extends ChangeNotifier {
   String sessionObservation = '';
 
   /// Background turn-video transcriptions, by student message id.
-  /// Each job runs on its own [AiClient], so interrupting or closing
-  /// the active tutor turn never cancels one, and vice versa.
+  /// They share the session [AiClient], but interrupting the active
+  /// tutor turn never cancels one (and vice versa): cancellation is
+  /// per-request, not per-client (see [AiClient.cancelTurn]).
   final Map<String, Future<bool>> _transcriptionJobs = {};
   bool _transcriptionSweepRunning = false;
 
@@ -183,7 +201,15 @@ class SessionController extends ChangeNotifier {
   bool _playbackCancelled = false;
   SuspendedPlayback? _suspended;
   bool _suspendedFromVoice = false;
-  AiClient? _activeClient;
+
+  /// The session's single [AiClient]: created lazily on first use
+  /// (so it snapshots the API key current when the session starts
+  /// working) and reused by every turn and background transcription,
+  /// instead of a fresh client - and fresh HTTP transport - per turn.
+  /// Per-turn isolation is now provided by the client's per-turn
+  /// cancellation (see [AiClient.cancelTurn]), not by closing it.
+  AiClient? _aiClient;
+  AiClient get aiClient => _aiClient ??= AiClient(settings.apiKey);
   Completer<void>? _playbackIdle;
   String _currentSpeechChunkForSuspend = '';
   int _playbackGeneration = 0;
@@ -301,9 +327,8 @@ class SessionController extends ChangeNotifier {
       'transcriptionError': null,
     });
     await _saveMessages();
-    final client = AiClient(settings.apiKey);
     try {
-      final transcript = await client.transcribeVideo(
+      final transcript = await aiClient.transcribeVideo(
         model: session.model,
         videoBase64: videoBase64,
       );
@@ -329,8 +354,6 @@ class SessionController extends ChangeNotifier {
       await _saveMessages();
       await db.appendLog('turn-video transcription failed: $detail');
       return false;
-    } finally {
-      client.close();
     }
   }
 
@@ -1106,14 +1129,13 @@ class SessionController extends ChangeNotifier {
     String? extraContext,
     List<String> priorVideosBase64 = const [],
   }) async {
-    // A fresh AiClient per turn is deliberate: it snapshots the current
-    // API key and, via _activeClient, gives interrupt/dispose a handle
-    // whose close() aborts exactly this turn's in-flight request. It is
-    // not a fresh transport per request - AiClient reuses its underlying
-    // HTTP client for every tool round of the turn (see its
-    // _NonClosingClient), which the function_call_output follow-ups need.
-    final client = AiClient(settings.apiKey);
-    _activeClient = client;
+    // The session's one AiClient, reused across turns: its HTTP
+    // transport (and connection pool) survives the turn, including
+    // every tool round's function_call_output follow-up. Interruption
+    // no longer needs a throwaway client as its abort handle -
+    // interruptPlayback cancels this turn via AiClient.cancelTurn,
+    // which leaves the client usable for the next turn.
+    final client = aiClient;
     _queue = PlaybackQueue();
     _producerDone = false;
     _playbackCancelled = false;
@@ -1137,12 +1159,81 @@ class SessionController extends ChangeNotifier {
     final generation = _playbackGeneration;
     final consumer = _consumeQueue(generation);
 
+    var sawTool = false;
+    // Incremental history: a draft AI message is created on the first
+    // streamed piece and updated as each piece completes, so board
+    // actions already performed are never missing from saved history
+    // if the turn fails midway. Finalisation reuses this message.
+    ChatMessage? draftMessage;
+    final draftItems = <Map<String, dynamic>>[];
+    final draftToolCalls = <Map<String, dynamic>>[];
+    var draftText = '';
+    var draftFlushedTextLength = 0;
+    void flushDraftText() {
+      final segment = draftText.substring(draftFlushedTextLength);
+      if (segment.trim().isNotEmpty) {
+        draftItems.add({'kind': 'text', 'text': segment});
+      }
+      draftFlushedTextLength = draftText.length;
+    }
+
+    void syncDraft({bool save = true}) {
+      final cleaned = draftText
+          .replaceAll(ignoreTurnSentinel, '')
+          .replaceAll(turnDoneSentinel, '')
+          .trim();
+      final payload = <String, dynamic>{
+        'text': cleaned,
+        'items': draftItems,
+        'toolCalls': draftToolCalls,
+        'toolOutputsPending': draftToolCalls.any(
+          (c) => !c.containsKey('output'),
+        ),
+      };
+      if (draftMessage == null) {
+        draftMessage = ChatMessage(
+          id: newId(),
+          sessionId: session.id,
+          role: 'ai',
+          kind: sawTool ? 'actions' : 'text',
+          payloadJson: jsonEncode(payload),
+          createdAt: DateTime.now(),
+        );
+        messages.add(draftMessage!);
+      } else {
+        final idx = messages.indexWhere((m) => m.id == draftMessage!.id);
+        if (idx < 0) return;
+        draftMessage = ChatMessage(
+          id: draftMessage!.id,
+          sessionId: session.id,
+          role: 'ai',
+          kind: sawTool ? 'actions' : 'text',
+          payloadJson: jsonEncode(payload),
+          createdAt: draftMessage!.createdAt,
+        );
+        messages[idx] = draftMessage!;
+      }
+      if (save) unawaited(_saveMessages());
+    }
+
+    void recordToolOutcome(String name, AiToolResult result) {
+      for (final entry in draftToolCalls) {
+        if (entry['name'] == name && !entry.containsKey('output')) {
+          entry['status'] = result.success ? 'success' : 'error';
+          entry['output'] = result.wireOutput;
+          break;
+        }
+      }
+      if (draftMessage != null) syncDraft();
+    }
+
     // Performs one tool call the model asked for. Board/notebook
     // actions go through the playback queue (so speech and drawing
     // stay in the order the model issued them) and the future only
     // completes when the consumer has actually performed the action;
-    // the AI client persists that outcome with the turn and only
-    // sends it back to the model when a call failed.
+    // the AI client starts this the moment the call is complete in
+    // the stream, then batches the round's outcomes into a single
+    // follow-up request back to the model.
     Future<AiToolResult> executeToolCall(
       String name,
       Map<String, dynamic> args,
@@ -1153,19 +1244,28 @@ class SessionController extends ChangeNotifier {
         );
       }
       if (name == 'search_session_observations') {
-        return AiToolResult.success(_observationSearchText(args));
+        final r = AiToolResult.success(_observationSearchText(args));
+        recordToolOutcome(name, r);
+        return r;
       }
       if (name == 'resume_explanation') {
         _queue.add(ResumeItem());
-        return const AiToolResult.success(
+        const r = AiToolResult.success(
           'The suspended explanation will resume.',
         );
+        recordToolOutcome(name, r);
+        return r;
       }
       final item = ActionItem(name, args);
       final completer = Completer<AiToolResult>();
       _pendingToolCalls[item] = completer;
+      texaDiag(
+        'play',
+        'tool queued tool=$name ${diagJson(args)} pending=${_pendingToolCalls.length} queuePending=${_queue.pendingSnapshot.length}',
+      );
       _queue.add(item);
       final result = await completer.future;
+      recordToolOutcome(name, result);
       // The result is on its way back to the model: until it replies
       // with speech or the next action, we are waiting on it again.
       if (generation == _playbackGeneration &&
@@ -1182,7 +1282,6 @@ class SessionController extends ChangeNotifier {
     final held = <String>[];
     var textReleased = false;
     var rawText = '';
-    var sawTool = false;
     final toolCallsRaw = <Map<String, dynamic>>[];
     try {
       await for (final event in client.streamTurn(
@@ -1203,6 +1302,8 @@ class SessionController extends ChangeNotifier {
         if (event is AiTextDelta) {
           _turnResponseReceived = true;
           rawText += event.text;
+          draftText = rawText;
+          if (draftMessage != null) syncDraft(save: false);
           if (_isSentinelOnlySoFar(rawText)) {
             if (rawText.contains(ignoreTurnSentinel) ||
                 rawText.contains(turnDoneSentinel)) {
@@ -1210,7 +1311,10 @@ class SessionController extends ChangeNotifier {
             }
             continue;
           }
+          var completedSentence = false;
           for (final sentence in splitter.add(event.text)) {
+            texaDiag('turn', 'sentence queued ${diagText(sentence)}');
+            completedSentence = true;
             if (!textReleased) {
               held.add(sentence);
               if (held.length >= 2) {
@@ -1224,14 +1328,39 @@ class SessionController extends ChangeNotifier {
               _queue.add(TextItem(sentence));
             }
           }
+          // Persist at completed-sentence granularity, not per token.
+          if (completedSentence) syncDraft();
+        } else if (event is AiReasoningComplete) {
+          _turnResponseReceived = true;
+          flushDraftText();
+          draftItems.add({
+            'kind': 'reasoning',
+            if (event.item['id'] != null) 'id': event.item['id'],
+            'summary': event.item['summary'] is List
+                ? event.item['summary']
+                : const [],
+            if (event.item['encrypted_content'] != null)
+              'encrypted_content': event.item['encrypted_content'],
+          });
+          syncDraft();
         } else if (event is AiToolCallComplete) {
           _turnResponseReceived = true;
           sawTool = true;
-          toolCallsRaw.add({
+          texaDiag(
+            'turn',
+            'toolcall received name=${event.name} callId=${event.callId.isEmpty ? 'MISSING' : event.callId} ${diagJson(event.args)} draftCalls=${draftToolCalls.length}',
+          );
+          flushDraftText();
+          final entry = <String, dynamic>{
+            'kind': 'toolCall',
             if (event.callId.isNotEmpty) 'id': event.callId,
             'name': event.name,
             'args': event.args,
-          });
+          };
+          toolCallsRaw.add(entry);
+          draftToolCalls.add(entry);
+          draftItems.add(entry);
+          syncDraft();
           for (final h in held) {
             _queue.add(TextItem(h));
           }
@@ -1259,21 +1388,42 @@ class SessionController extends ChangeNotifier {
           // Save the AI reply before playback drains. When a sentinel
           // was involved, persist the cleaned text instead of the raw
           // one: the sentinel is a control signal, never content, and
-          // must stay out of history/replay. responseId is kept, so
-          // request chaining (previous_response_id) still works.
+          // must stay out of history/replay.
           final cleanedRaw =
               parsed.kind == 'turnDone' || parsed.text != rawText.trim()
               ? <String, dynamic>{...event.raw, 'text': parsed.text}
               : event.raw;
-          messages.add(
-            ChatMessage(
-              id: newId(),
+          if (draftMessage == null) {
+            messages.add(
+              ChatMessage(
+                id: newId(),
+                sessionId: session.id,
+                role: 'ai',
+                kind: sawTool ? 'actions' : 'text',
+                payloadJson: jsonEncode(cleanedRaw),
+                createdAt: DateTime.now(),
+              ),
+            );
+          } else {
+            final idx = messages.indexWhere((m) => m.id == draftMessage!.id);
+            final finalized = ChatMessage(
+              id: draftMessage!.id,
               sessionId: session.id,
               role: 'ai',
               kind: sawTool ? 'actions' : 'text',
               payloadJson: jsonEncode(cleanedRaw),
-              createdAt: DateTime.now(),
-            ),
+              createdAt: draftMessage!.createdAt,
+            );
+            if (idx >= 0) {
+              messages[idx] = finalized;
+            } else {
+              messages.add(finalized);
+            }
+            draftMessage = finalized;
+          }
+          texaDiag(
+            'turn',
+            'done persisted kind=${parsed.kind} text=${diagText(parsed.text)} rawItems=${diagJson(event.raw['items'])} rawCalls=${diagJson(event.raw['toolCalls'])}',
           );
           await _saveMessages();
           if (parsed.kind == 'ignore') {
@@ -1331,8 +1481,10 @@ class SessionController extends ChangeNotifier {
       }
     } finally {
       _producerDone = true;
-      client.close();
-      if (identical(_activeClient, client)) _activeClient = null;
+      // Not client.close(): the client is the session's, not this
+      // turn's. A turn that ended because interruptPlayback cancelled
+      // it has already had its request aborted; a turn that ended
+      // normally has nothing in flight left to abort.
     }
     if (generation != _playbackGeneration) return;
     await consumer;
@@ -1349,7 +1501,19 @@ class SessionController extends ChangeNotifier {
       while (generation == _playbackGeneration && !_disposed) {
         final item = _queue.next();
         if (item == null) {
-          if (_producerDone) break;
+          if (_producerDone) {
+            // Nothing left to perform, but speech enqueued along the
+            // way may still be playing: the turn is not over (and the
+            // state must not drop back to listening) until it drains.
+            // This waits at turn end only - never between items.
+            if (!_playbackCancelled &&
+                generation == _playbackGeneration &&
+                speaker.isSpeaking) {
+              await speaker.drained;
+              continue;
+            }
+            break;
+          }
           await Future<void>.delayed(const Duration(milliseconds: 40));
           continue;
         }
@@ -1368,21 +1532,66 @@ class SessionController extends ChangeNotifier {
           notifyListeners();
           _currentSpeechChunkForSuspend =
               splitSpeech(item.text).firstOrNull ?? item.text;
+          texaDiag(
+            'play',
+            'text start ${diagText(item.text)} queuePending=${_queue.pendingSnapshot.length} speaking=${speaker.isSpeaking}',
+          );
           speaker.enqueueText(item.text);
-          await speaker.drained;
           _queue.completed.add({'tool': 'text', 'rect': ''});
+          // Playback stays sequential: the next queued item (text or
+          // action) is not performed until this speech has finished.
+          // This does NOT block the agentic loop - no tool outcome is
+          // waiting on a TextItem, and ActionItems release their
+          // outcome early (see _executeAction's onOutcome) - it only
+          // orders what the student sees/hears. On interruption
+          // speaker.stop() completes the drain, and the generation
+          // check above then abandons the queue as before.
+          await speaker.drained;
+          texaDiag(
+            'play',
+            'text done ${diagText(item.text)} cancelled=$_playbackCancelled gen=$generation/$_playbackGeneration',
+          );
         } else if (item is ActionItem) {
           _turnOutputSurfaced = true;
           activeActionTool = item.tool;
           notifyListeners();
+          texaDiag(
+            'play',
+            'action start tool=${item.tool} id=${item.elementId} ${diagJson(item.args)} queuePending=${_queue.pendingSnapshot.length}',
+          );
           AiToolResult result;
           try {
-            result = await _executeAction(item);
+            result = await _executeAction(
+              item,
+              generation: generation,
+              // Release the outcome to the AI client the moment the
+              // action itself is known (applied/failed), so the next
+              // model round starts while this item's speech/camera
+              // finish playing here. The consumer still awaits the
+              // full _executeAction, so playback of the next queued
+              // item cannot overtake this item's speech.
+              onOutcome: (outcome) {
+                final pending = _pendingToolCalls.remove(item);
+                texaDiag(
+                  'play',
+                  'action outcome-early tool=${item.tool} success=${outcome.success} ${diagText(outcome.output)} hadPending=${pending != null}',
+                );
+                pending?.complete(outcome);
+              },
+            );
           } catch (e) {
             result = AiToolResult.failure('The action failed: $e');
           }
           activeActionTool = null;
           notifyListeners();
+          texaDiag(
+            'play',
+            'action playback-done tool=${item.tool} success=${result.success} cancelled=$_playbackCancelled gen=$generation/$_playbackGeneration',
+          );
+          // Fallback only: onOutcome normally completed this already.
+          // If the action threw before reporting, or playback was
+          // interrupted first, this (or _failPendingToolCalls) is what
+          // unblocks the AI client.
           _pendingToolCalls.remove(item)?.complete(result);
         }
         if (_disposed) break;
@@ -1446,10 +1655,52 @@ class SessionController extends ChangeNotifier {
   }
 
   /// Performs one board/notebook action and reports whether it actually
-  /// happened, so the outcome can be persisted as the tool result (and
-  /// sent back to the model when the action failed, instead of the
-  /// model assuming every call succeeded).
-  Future<AiToolResult> _executeAction(ActionItem item) async {
+  /// happened, so the outcome can be persisted as the tool result and
+  /// sent back to the model (instead of the model assuming every call
+  /// succeeded).
+  /// [onOutcome] is invoked exactly once, as soon as the action's
+  /// outcome is known (applied or failed) - BEFORE any speech drain -
+  /// so the AI client's next round is never gated on TTS. The returned
+  /// future, which the playback consumer awaits, only completes after
+  /// the action's speech (if any) has finished playing, keeping
+  /// playback sequential. [generation] is the consumer's playback
+  /// generation: if an interruption supersedes it while speech drains,
+  /// the post-speech steps are skipped (the suspended snapshot, taken
+  /// from the speech chunk, owns resumption from here).
+  Future<AiToolResult> _executeAction(
+    ActionItem item, {
+    required int generation,
+    void Function(AiToolResult outcome)? onOutcome,
+  }) async {
+    var outcomeReported = false;
+    void reportOutcome(AiToolResult outcome) {
+      if (outcomeReported) {
+        texaDiag(
+          'play',
+          'action outcome DUPLICATE suppressed tool=${item.tool}',
+        );
+        return;
+      }
+      outcomeReported = true;
+      onOutcome?.call(outcome);
+    }
+
+    bool superseded() =>
+        generation != _playbackGeneration || _playbackCancelled;
+
+    Future<void> drainSpeech(String speech) async {
+      if (speech.isEmpty) return;
+      texaDiag(
+        'play',
+        'speech drain wait tool=${item.tool} ${diagText(speech)} speaking=${speaker.isSpeaking}',
+      );
+      await speaker.drained;
+      texaDiag(
+        'play',
+        'speech drain done tool=${item.tool} superseded=${superseded()}',
+      );
+    }
+
     if (item.tool == 'update_session_observation' ||
         item.tool == 'update_memory') {
       AiToolResult result;
@@ -1472,28 +1723,43 @@ class SessionController extends ChangeNotifier {
       final speech = item.speech;
       if (speech != null && speech.isNotEmpty) {
         speaker.enqueueText(speech);
-        await speaker.drained;
+        // The model does not always track that its explanation_speech
+        // has already been heard; say so in the result it reads next,
+        // which is the point where it otherwise tends to paraphrase
+        // that speech as ordinary text.
+        if (result.success) {
+          result = AiToolResult.success(
+            '${result.output} Its explanation_speech was already '
+            'spoken to the student; do not repeat it.',
+          );
+        }
+        // Outcome to the model now; playback (this future) only after
+        // the speech has actually been heard.
+        reportOutcome(result);
+        await drainSpeech(speech);
+      } else {
+        reportOutcome(result);
       }
       return result;
     }
     final rect = board.rectForArgs(item.args);
-    if (rect != null && item.tool != 'remove_element') {
-      await board.frameRect(clampToBoard(rect));
+    // focus_viewport's whole job is the framing itself, so it frames
+    // exactly once - after apply, below. Pre-framing it here too was
+    // one of the two camera moves the student saw as a double zoom.
+    if (rect != null &&
+        item.tool != 'remove_element' &&
+        item.tool != 'focus_viewport') {
+      await board.frameRect(clampToBoard(rect), source: 'pre:${item.tool}');
     }
     final speech = item.speech;
     var animDone = false;
     Future<void> animate() async {
-      final sw = Stopwatch()..start();
-      while (sw.elapsedMilliseconds < 450 && !_playbackCancelled) {
-        final el = board.elements
-            .where((e) => e.id == item.elementId)
-            .firstOrNull;
-        if (el != null) {
-          el.progress = (sw.elapsedMilliseconds / 450).clamp(0, 1);
-          board.notifyListenersPublic();
-        }
-        await Future<void>.delayed(const Duration(milliseconds: 16));
-      }
+      // Ramp only the elements this action is bringing in (the board
+      // sets their progress to 0); never restart the entrance of the
+      // element the action merely targets. Driving item.elementId
+      // here used to reset a plot to progress 0 whenever a landmark
+      // was marked on it, wiping its function lines from the canvas.
+      await board.animateEntering(isCancelled: () => _playbackCancelled);
       animDone = true;
     }
 
@@ -1504,15 +1770,40 @@ class SessionController extends ChangeNotifier {
       speaker.enqueueText(speech);
     }
     applied = await actionFuture;
-    if (speech != null && speech.isNotEmpty) await speaker.drained;
+    texaDiag(
+      'play',
+      'action applied tool=${item.tool} rect=$applied speech=${speech == null ? 'none' : diagText(speech)}',
+    );
     if (!animDone) await animate();
+    // The outcome is known now. Release it to the AI client at once
+    // (its next round overlaps the camera move + speech below), but
+    // keep this future - and therefore the playback consumer and every
+    // item queued behind this one - waiting until the action's speech
+    // has finished, so narration and board stay in issued order.
+    final result = applied != null
+        ? AiToolResult.success(
+            _boardActionResultText(item, applied) +
+                (speech != null && speech.isNotEmpty
+                    ? ' Its explanation_speech was already spoken to '
+                          'the student; do not repeat it.'
+                    : ''),
+          )
+        : AiToolResult.failure(
+            '${item.tool} could not be performed: check the element_id, '
+            'the arguments, and that the target element exists.',
+          );
+    reportOutcome(result);
     // The pre-action framing above used the rect predicted from the
     // raw arguments; the applied rect is the truth (text is measured,
     // edits may have moved/resized the element, landmarks land where
     // they land). Frame it if the prediction missed it, otherwise the
     // new content can end up off-screen with no camera move at all.
-    if (applied != null && item.tool != 'remove_element') {
-      await board.frameRectUnlessCovered(applied, rect);
+    if (applied != null && item.tool != 'remove_element' && !superseded()) {
+      await board.frameRectUnlessCovered(
+        applied,
+        item.tool == 'focus_viewport' ? null : rect,
+        source: 'post:${item.tool}',
+      );
     }
     if (applied != null) {
       _queue.completed.add({
@@ -1522,12 +1813,14 @@ class SessionController extends ChangeNotifier {
       });
     }
     _scheduleSave();
-    return applied != null
-        ? AiToolResult.success(_boardActionResultText(item, applied))
-        : AiToolResult.failure(
-            '${item.tool} could not be performed: check the element_id, '
-            'the arguments, and that the target element exists.',
-          );
+    // If interrupted while applying, the suspended snapshot (built
+    // from the current speech chunk) re-speaks this chunk on resume;
+    // do not also drain-wait here - speaker.stop() already ended it,
+    // and the generation check keeps the consumer from advancing.
+    if (speech != null && speech.isNotEmpty && !superseded()) {
+      await drainSpeech(speech);
+    }
+    return result;
   }
 
   /// The success result of a board action: just the element and its
@@ -1547,7 +1840,13 @@ class SessionController extends ChangeNotifier {
       if (el != null) rect = el.rect;
     }
     final bbox = BoardController.describeBoardRect(rect);
-    final named = id == null ? item.tool : "${item.tool} '$id'";
+    final focusIds = item.args['element_ids'];
+    final named =
+        item.tool == 'focus_viewport' && focusIds is List && focusIds.isNotEmpty
+        ? "${item.tool} '${focusIds.join("', '")}'"
+        : id == null
+        ? item.tool
+        : "${item.tool} '$id'";
     return switch (item.tool) {
       'remove_element' => '$named removed, $bbox now free.',
       'point_at' => '$named pointed at $bbox.',
@@ -1561,18 +1860,24 @@ class SessionController extends ChangeNotifier {
   /// Halts playback promptly; completed board content stays exactly as drawn.
   Future<void> interruptPlayback({required bool fromVoice}) async {
     if (!_turnInFlight) return;
+    texaDiag(
+      'play',
+      'interrupt fromVoice=$fromVoice surfaced=$_turnOutputSurfaced pendingTools=${_pendingToolCalls.length} queuePending=${_queue.pendingSnapshot.length} speaking=${speaker.isSpeaking} chunk=${speaker.currentChunk.value == null ? 'none' : diagText(speaker.currentChunk.value!)}',
+    );
     _failPendingToolCalls('Playback was interrupted before this action ran.');
+    final interruptedTurn = _activeTurn;
     // Abort the request FIRST, before anything that can take time
-    // (stopping audio): this completes AiClient's close signal, which
-    // both ends the locally-awaited stream at once and fires the
-    // transport's abort trigger for the in-flight HTTP request - even
-    // while it is still reaching the server or awaiting its first
-    // token, the phases where the status already reads "thinking".
-    _activeClient?.close();
+    // (stopping audio): this fires the turn's cancellation, which
+    // both ends the locally-awaited stream at once and aborts the
+    // in-flight HTTP request at the transport - even while it is
+    // still reaching the server or awaiting its first token, the
+    // phases where the status already reads "thinking". The session
+    // client itself stays open for the next turn/transcription.
+    aiClient.cancelTurn();
     // Thinking-phase interruption: the model has produced nothing the
     // student has seen or heard yet, so there is no partial explanation
-    // to suspend/resume. Cancel the request outright (client close
-    // below, made prompt by AiClient._untilClosed) and supersede the
+    // to suspend/resume. Cancel the request outright (cancelTurn
+    // above, made prompt by AiClient's per-turn cancellation) and supersede the
     // turn: its input is concatenated into the next fresh turn instead
     // of being answered on its own. Any interruption context the model
     // already received with it is moot - nothing was ever said.
@@ -1591,10 +1896,16 @@ class SessionController extends ChangeNotifier {
     _producerDone = true;
     await speaker.stop();
     activeActionTool = null;
-    state = TurnState.listening;
+    // While the speaker was stopping, the student may already have
+    // started a new capture (voice barge-in begins it synchronously)
+    // or a fresh turn: do not clobber that state with "listening".
+    if (!_capturing &&
+        (_activeTurn == null || identical(_activeTurn, interruptedTurn))) {
+      state = TurnState.listening;
+      // A new playback generation can start (e.g. false-trigger resume).
+      _playbackCancelled = false;
+    }
     notifyListeners();
-    // A new playback generation can start (e.g. false-trigger resume).
-    _playbackCancelled = false;
   }
 
   /// Stops the AI completely, discarding any suspended explanation.
@@ -1616,6 +1927,10 @@ class SessionController extends ChangeNotifier {
   void _resumeSuspended() {
     final s = _suspended;
     if (s == null) return;
+    texaDiag(
+      'play',
+      'resume suspended remaining=${s.remaining.length} completed=${s.completedActions.length} chunk=${s.interruptedSpeechChunk == null ? 'none' : diagText(s.interruptedSpeechChunk!)}',
+    );
     _suspended = null;
     // The resumed explanation continues on the board; show its actions
     // again (a fresh manual move during it re-takes the camera).
@@ -1642,6 +1957,7 @@ class SessionController extends ChangeNotifier {
 
   @override
   void dispose() {
+    if (identical(texaDiagSink, _diagSink)) texaDiagSink = null;
     _disposed = true;
     _saveTimer?.cancel();
     _errorTimer?.cancel();
@@ -1653,7 +1969,7 @@ class SessionController extends ChangeNotifier {
     unawaited(_vad?.dispose() ?? Future<void>.value());
     unawaited(speaker.stop());
     speaker.dispose();
-    _activeClient?.close();
+    _aiClient?.close();
     board.dispose();
     super.dispose();
   }

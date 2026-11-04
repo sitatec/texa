@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:math_expressions/math_expressions.dart';
 
@@ -129,6 +131,48 @@ List<Offset> _withBreaks(
 /// Data-space points where any two of [expressions] cross within
 /// [xMin, xMax], found by sign changes of pairwise differences on a
 /// common sample grid and refined by linear interpolation.
+/// Spacing between axis tick marks for a data range: 1 unit whenever
+/// that stays readable (the common classroom case the student asked
+/// for), otherwise the next 1/2/5/10 step that keeps ~8 ticks.
+double plotTickStep(double range) {
+  if (!range.isFinite || range <= 0) return 1;
+  final raw = range / 8;
+  final magnitude = math
+      .pow(10, (math.log(raw) / math.ln10).floor())
+      .toDouble();
+  final normalised = raw / magnitude;
+  final factor = normalised < 1.5
+      ? 1.0
+      : normalised < 3.5
+      ? 2.0
+      : normalised < 7.5
+      ? 5.0
+      : 10.0;
+  return factor * magnitude;
+}
+
+/// Tick values inside [min, max] at [plotTickStep] spacing, aligned to
+/// multiples of the step (so integer data gets integer ticks).
+List<double> plotTicks(double min, double max) {
+  final step = plotTickStep(max - min);
+  final out = <double>[];
+  var v = (min / step).ceil() * step;
+  // Guard against floating dust pushing the first tick past max.
+  while (v <= max + step * 1e-9) {
+    out.add(v == 0 ? 0 : v);
+    v += step;
+  }
+  return out;
+}
+
+/// Label for a tick value: integers without a decimal point, smaller
+/// steps with just the decimals they need.
+String plotTickLabel(double value, double step) {
+  if (step >= 1) return value.toStringAsFixed(0);
+  final decimals = step >= 0.1 ? 1 : 2;
+  return value.toStringAsFixed(decimals);
+}
+
 List<Offset> plotIntersections(
   List<String> expressions,
   double xMin,

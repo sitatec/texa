@@ -13,7 +13,6 @@ dependencies:
   flutter_localizations:
     sdk: flutter
 
-  dart_openai: ^8.0.0
   flutter_quick_video_encoder: ^1.7.2
   flutter_secure_storage: ^11.2.0
   web: ^1.1.2

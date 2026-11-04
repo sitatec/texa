@@ -138,7 +138,7 @@
     "@welcomeGuideTitle": {
       "description": "Heading of the welcome dialog section explaining that Texa guides rather than handing out solutions."
     },
-    "welcomeGuideBody": "Texa is built to help you understand, not to do the thinking for you. Bring a problem and Texa will ask what you think, encourage you to try, and then guide you step by step with questions, hints and support until it clicks. You won't be handed a finished solution—but you'll come away able to solve the next problem yourself.",
+    "welcomeGuideBody": "Texa is built to help you understand, not to do the thinking for you. Bring a problem and Texa will ask what you think, encourage you to try, and then guide you step by step with questions, hints and support until it clicks. For now, it is best to bring a problem you already have the solution to, but do not yet understand how to solve—so you can check Texa's guidance against that solution. You won't be handed a finished solution—but you'll come away able to solve the next problem yourself.",
     "@welcomeGuideBody": {
       "description": "Body of the welcome dialog section explaining that Texa guides rather than handing out solutions."
     },
@@ -146,7 +146,7 @@
     "@welcomeQuietTitle": {
       "description": "Heading of the welcome dialog section asking for a quiet environment."
     },
-    "welcomeQuietBody": "Texa learns by listening as you talk through your ideas, so background voices can be picked up too. Texa can usually tell your speech apart from unrelated voices, but telling them apart takes extra effort and slows its replies down. A quiet environment keeps the conversation quick and focused.",
+    "welcomeQuietBody": "Texa listens as you talk through your ideas, so background voices can be picked up too. Texa can usually tell your speech apart from unrelated voices, but it slows communication. A quiet environment keeps the conversation quick and focused.\nAvoid taking long pauses while speaking otherwise the Texa will think you are don't speaking and will start replying.",
     "@welcomeQuietBody": {
       "description": "Body of the welcome dialog section asking for a quiet environment, since background voices slow Texa down."
     },

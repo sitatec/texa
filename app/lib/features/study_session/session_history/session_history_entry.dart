@@ -71,6 +71,17 @@ class SessionHistoryEntry extends StatelessWidget {
     final video = isAi ? null : m.payload['videoBase64'] as String?;
     final uploads = isAi ? const <AiUpload>[] : AiClient.uploadsOf(m);
     final calls = m.payload['toolCalls'];
+    // Ordered turn pieces (text before/between/after tool calls),
+    // when persisted: text that follows a call refers to what that
+    // call put on the board, so pieces must render in turn order -
+    // never as one merged text block followed by every action.
+    final rawItems = m.payload['items'];
+    final orderedItems = isAi && rawItems is List && rawItems.isNotEmpty
+        ? rawItems
+              .whereType<Map>()
+              .map((e) => e.cast<String, dynamic>())
+              .toList()
+        : null;
     return ListTile(
       leading: Icon(isAi ? Symbols.auto_awesome : Symbols.person_outline),
       titleAlignment: .top,
@@ -78,7 +89,25 @@ class SessionHistoryEntry extends StatelessWidget {
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (text.isNotEmpty) Text(text),
+          if (orderedItems != null)
+            for (final item in orderedItems) ...[
+              if (item['kind'] == 'text' &&
+                  (item['text'] as String? ?? '').trim().isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text((item['text'] as String).trim()),
+                ),
+              if (item['kind'] == 'toolCall' &&
+                  !_internalTools.contains(item['name']))
+                _ActionEntry(call: item),
+            ]
+          else ...[
+            if (text.isNotEmpty) Text(text),
+            if (calls is List)
+              for (final call in calls)
+                if (call is Map && !_internalTools.contains(call['name']))
+                  _ActionEntry(call: call.cast<String, dynamic>()),
+          ],
           if (uploads.isNotEmpty) ...[
             const SizedBox(height: 8),
             Wrap(
@@ -90,10 +119,6 @@ class SessionHistoryEntry extends StatelessWidget {
               ],
             ),
           ],
-          if (calls is List)
-            for (final call in calls)
-              if (call is Map && !_internalTools.contains(call['name']))
-                _ActionEntry(call: call.cast<String, dynamic>()),
           if (video != null && video.isNotEmpty) ...[
             const SizedBox(height: 8),
             SizedBox(
@@ -158,6 +183,36 @@ class _ActionEntry extends StatelessWidget {
               ],
             ],
           ),
+          // What Texa said while performing this action, shown above
+          // the element it produced - in the session it was heard
+          // alongside the drawing, so in history it belongs with (and
+          // before) that element, not merged into the turn's text.
+          if ((_args['explanation_speech'] as String? ?? '')
+              .trim()
+              .isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(
+                  Symbols.text_to_speech,
+                  size: 14,
+                  color: Colors.black45,
+                ),
+                const SizedBox(width: 5),
+                Flexible(
+                  child: Text(
+                    (_args['explanation_speech'] as String).trim(),
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontStyle: FontStyle.italic,
+                      color: Colors.black54,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 4),
           _content(context),
         ],
@@ -193,8 +248,8 @@ class _ActionEntry extends StatelessWidget {
             InkWell(
               onTap: () => _enlargePlot(context, element),
               child: Container(
-                height: 180,
-                width: double.infinity,
+                height: 200,
+                width: 400,
                 decoration: BoxDecoration(
                   color: Colors.white,
                   border: Border.all(color: Colors.black12),

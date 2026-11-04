@@ -68,6 +68,10 @@
 		</array>
 		<key>NSMicrophoneUsageDescription</key>
 		<string>Texa listens so you can talk to your tutor while you draw. Your voice is sent to Meta AI only when you speak to the tutor.</string>
+		<key>NSCameraUsageDescription</key>
+		<string>Texa uses your camera so you can take photos to attach to your AI tutoring sessions.</string>
+		<key>NSPhotoLibraryUsageDescription</key>
+		<string>"Texa uses your photo library so you can attach images to your AI tutoring sessions.</string>
 		<key>NSAppTransportSecurity</key>
 		<dict>
 			<key>NSAllowsLocalNetworking</key>

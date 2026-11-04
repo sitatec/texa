@@ -361,9 +361,8 @@ void main() {
       ).toList();
 
       final body = h.lastBody();
-      // A replay (no stored response to chain onto yet) is stored so
-      // the next turn can chain; only past-window replays are not.
-      expect(body['store'], isTrue);
+      // Stateless from the start: nothing is stored server-side.
+      expect(body['store'], isFalse);
       final input = body['input'] as List;
       final earlier = (input.first as Map)['content'] as List;
       expect(earlier.first['text'], contains('old doc'));
@@ -465,7 +464,7 @@ void main() {
         ]);
         expect(input[1], {
           'type': 'function_call',
-          'call_id': 'call_write_text_0',
+          'call_id': 'call_m-ai_0',
           'name': 'write_text',
           'arguments': '{"element_id":"title"}',
         });
@@ -473,7 +472,7 @@ void main() {
         // with "No tool output found for function call ...".
         expect(input[2], {
           'type': 'function_call_output',
-          'call_id': 'call_write_text_0',
+          'call_id': 'call_m-ai_0',
           'output': '{"status":"success"}',
         });
         expect((input[3] as Map)['content'], 'thanks');
@@ -634,10 +633,11 @@ void main() {
       'data: [DONE]\n\n',
     ].join();
 
-    test('sends only previous_response_id + new input when stored', () async {
+    test('replays full history statelessly even when a legacy '
+        'responseId is present', () async {
       final h = sequence([textRound('resp_9', 'hi')]);
       final client = AiClient('key', client: h.client);
-      await turn(
+      final events = await turn(
         client,
         history: [
           message('ai', {
@@ -653,24 +653,22 @@ void main() {
 
       expect(h.bodies, hasLength(1));
       final body = h.bodies.single;
-      expect(body['store'], isTrue);
-      expect(body['previous_response_id'], 'resp_8');
-      // No history replay: the single input item is this turn's context.
+      expect(body['store'], isFalse);
+      expect(body.containsKey('previous_response_id'), isFalse);
+      expect(body['include'], ['reasoning.encrypted_content']);
       final input = body['input'] as List;
-      expect(input, hasLength(1));
-      expect((input.single as Map)['role'], 'user');
-      // The new response id is surfaced for the caller to persist.
-      final done = await turn(
-        AiClient('key', client: sequence([textRound('resp_9', 'hi')]).client),
-        history: [
-          message('ai', {'text': 'x', 'responseId': 'resp_8'}),
-        ],
-      ).toList().then((e) => e.last);
-      expect((done as AiStreamDone).responseId, 'resp_9');
+      // History is replayed, not skipped for a stored chain.
+      expect(
+        input.any((i) => i is Map && i['type'] == 'function_call'),
+        isTrue,
+      );
+      expect((input.last as Map)['role'], 'user');
+      // No response id is handed back to persist as a chain link.
+      expect((events.last as AiStreamDone).responseId, isNull);
     });
 
-    test('successful tool results are persisted, not sent back, and '
-        'the turn ends after one request', () async {
+    test('successful tool results are sent back in one follow-up '
+        'request and the loop continues', () async {
       final h = sequence([toolRound(), textRound('resp_2', 'Done')]);
       final executed = <String>[];
       final events = await AiClient('key', client: h.client)
@@ -686,24 +684,567 @@ void main() {
           .toList();
 
       expect(executed, ['write_math']);
-      // No follow-up request: the model never sees the success result
-      // in this turn, so it cannot continue with a next step.
-      expect(h.bodies, hasLength(1));
+      expect(h.bodies, hasLength(2));
+      final followUp = h.bodies[1];
+      expect(followUp['store'], isFalse);
+      expect(followUp.containsKey('previous_response_id'), isFalse);
+      expect(followUp['include'], ['reasoning.encrypted_content']);
+      // Self-contained: turn input, the call, then its output.
+      final followInput = followUp['input'] as List;
+      expect(followInput.last, {
+        'type': 'function_call_output',
+        'call_id': 'call_write_math',
+        'output': '{"status":"success","detail":"write_math performed."}',
+      });
+      expect(
+        followInput.any((i) => i is Map && i['type'] == 'function_call'),
+        isTrue,
+      );
       expect(
         events.whereType<AiToolCallComplete>().single.callId,
         'call_write_math',
       );
       final done = events.last as AiStreamDone;
-      expect(done.fullText, '');
-      expect(done.responseId, 'resp_1');
-      expect(done.raw['responseId'], 'resp_1');
-      // The outcome is still recorded on the persisted call, for the
+      expect(done.fullText, 'Done');
+      expect(done.responseId, isNull);
+      expect(done.raw['responseId'], isNull);
+      expect(done.raw['responseIds'], ['resp_1', 'resp_2']);
+      // The outcome is also recorded on the persisted call, for the
       // history sheet and for replay in a later turn's request.
       final savedCall = (done.raw['toolCalls'] as List).single as Map;
       expect(savedCall['id'], 'call_write_math');
       expect(savedCall['status'], 'success');
       expect(savedCall['output'], contains('write_math performed.'));
-      expect(done.raw['toolOutputsPending'], isTrue);
+      expect(done.raw['toolOutputsPending'], isFalse);
+    });
+
+    test('multiple tool calls in one response are executed and their '
+        'results sent back together in a single follow-up request', () async {
+      String twoCallRound() => [
+        evt({
+          'type': 'response.created',
+          'response': {'id': 'resp_1'},
+        }),
+        evt({
+          'type': 'response.output_item.done',
+          'item': {
+            'type': 'function_call',
+            'id': 'fc1',
+            'call_id': 'call_a',
+            'name': 'write_text',
+            'arguments': '{"text":"A"}',
+          },
+        }),
+        evt({
+          'type': 'response.output_item.done',
+          'item': {
+            'type': 'function_call',
+            'id': 'fc2',
+            'call_id': 'call_b',
+            'name': 'write_math',
+            'arguments': '{"latex":"x^2"}',
+          },
+        }),
+        evt({
+          'type': 'response.completed',
+          'response': {'id': 'resp_1', 'output': []},
+        }),
+        'data: [DONE]\n\n',
+      ].join();
+      final h = sequence([twoCallRound(), textRound('resp_2', 'Done')]);
+      final executed = <String>[];
+      final events = await AiClient('key', client: h.client)
+          .streamTurn(
+            videoBase64: '',
+            model: 'test-model',
+            history: const [],
+            executeToolCall: (name, args) async {
+              executed.add(name);
+              return AiToolResult.success('$name done');
+            },
+          )
+          .toList();
+
+      expect(executed, ['write_text', 'write_math']);
+      // Exactly one follow-up request, carrying both outputs in the
+      // order the calls were issued - never one request per call.
+      expect(h.bodies, hasLength(2));
+      final followUpInput = h.bodies[1]['input'] as List;
+      final outputs = followUpInput
+          .where((i) => i is Map && i['type'] == 'function_call_output')
+          .toList();
+      expect(outputs.map((item) => (item as Map)['call_id']), [
+        'call_a',
+        'call_b',
+      ]);
+      final saved = (events.last as AiStreamDone).raw['toolCalls'] as List;
+      expect(saved.map((c) => (c as Map)['status']), ['success', 'success']);
+    });
+
+    test('two same-name calls reported again on response.completed '
+        'execute only once each (regression: duplicate outputs)', () async {
+      // Real provider shape: both calls stream via output_item.done,
+      // then response.completed lists BOTH in its output. The terminal
+      // copies must be recognised as the already-running calls, not
+      // re-executed - re-executing produced duplicate board actions,
+      // duplicate persisted calls, and a follow-up the API rejects
+      // with "Duplicate function_call_output for call_id ...".
+      String round() => [
+        evt({
+          'type': 'response.created',
+          'response': {'id': 'resp_1'},
+        }),
+        evt({
+          'type': 'response.output_item.done',
+          'item': {
+            'type': 'function_call',
+            'id': 'fc1',
+            'call_id': 'call_alex',
+            'name': 'write_math',
+            'arguments': '{"latex":"a","element_id":"alex_path"}',
+          },
+        }),
+        evt({
+          'type': 'response.output_item.done',
+          'item': {
+            'type': 'function_call',
+            'id': 'fc2',
+            'call_id': 'call_jordan',
+            'name': 'write_math',
+            'arguments': '{"latex":"b","element_id":"jordan_path"}',
+          },
+        }),
+        evt({
+          'type': 'response.completed',
+          'response': {
+            'id': 'resp_1',
+            'output': [
+              {
+                'type': 'function_call',
+                'id': 'fc1',
+                'call_id': 'call_alex',
+                'name': 'write_math',
+                'arguments': '{"latex":"a","element_id":"alex_path"}',
+              },
+              {
+                'type': 'function_call',
+                'id': 'fc2',
+                'call_id': 'call_jordan',
+                'name': 'write_math',
+                'arguments': '{"latex":"b","element_id":"jordan_path"}',
+              },
+            ],
+          },
+        }),
+        'data: [DONE]\n\n',
+      ].join();
+      final h = sequence([round(), textRound('resp_2', 'Done')]);
+      final executed = <String>[];
+      final events = await AiClient('key', client: h.client)
+          .streamTurn(
+            videoBase64: '',
+            model: 'test-model',
+            history: const [],
+            executeToolCall: (name, args) async {
+              executed.add(args['element_id'] as String);
+              return AiToolResult.success('$name done');
+            },
+          )
+          .toList();
+
+      expect(executed, ['alex_path', 'jordan_path']);
+      expect(h.bodies, hasLength(2));
+      final followUpInput = h.bodies[1]['input'] as List;
+      final outputs = followUpInput
+          .where((i) => i is Map && i['type'] == 'function_call_output')
+          .toList();
+      expect(outputs.map((i) => (i as Map)['call_id']), [
+        'call_alex',
+        'call_jordan',
+      ]);
+      final calls = followUpInput
+          .where((i) => i is Map && i['type'] == 'function_call')
+          .toList();
+      expect(calls.map((i) => (i as Map)['call_id']), [
+        'call_alex',
+        'call_jordan',
+      ]);
+      final saved = (events.last as AiStreamDone).raw['toolCalls'] as List;
+      expect(saved, hasLength(2));
+    });
+
+    test('calls keyed by output_index in argument events and by '
+        'item id on response.completed execute only once each', () async {
+      String divergentKeyRound() => [
+        evt({
+          'type': 'response.created',
+          'response': {'id': 'resp_1'},
+        }),
+        evt({
+          'type': 'response.function_call_arguments.done',
+          'output_index': 0,
+          'name': 'write_text',
+          'arguments': '{"text":"A","element_id":"a"}',
+        }),
+        evt({
+          'type': 'response.function_call_arguments.done',
+          'output_index': 1,
+          'name': 'write_text',
+          'arguments': '{"text":"B","element_id":"b"}',
+        }),
+        evt({
+          'type': 'response.completed',
+          'response': {
+            'id': 'resp_1',
+            'output': [
+              {
+                'type': 'function_call',
+                'id': 'fc1',
+                'call_id': 'call_a',
+                'name': 'write_text',
+                'arguments': '{"text":"A","element_id":"a"}',
+              },
+              {
+                'type': 'function_call',
+                'id': 'fc2',
+                'call_id': 'call_b',
+                'name': 'write_text',
+                'arguments': '{"text":"B","element_id":"b"}',
+              },
+            ],
+          },
+        }),
+        'data: [DONE]\n\n',
+      ].join();
+      final h = sequence([divergentKeyRound(), textRound('resp_2', 'Done')]);
+      final executed = <String>[];
+      final events = await AiClient('key', client: h.client)
+          .streamTurn(
+            videoBase64: '',
+            model: 'test-model',
+            history: const [],
+            executeToolCall: (name, args) async {
+              executed.add('${args['element_id']}');
+              return AiToolResult.success('$name done');
+            },
+          )
+          .toList();
+      // Each physical call executed exactly once, despite the
+      // terminal event re-reporting them under different keys.
+      expect(executed, ['a', 'b']);
+      expect(events.whereType<AiToolCallComplete>(), hasLength(2));
+      final saved = (events.last as AiStreamDone).raw['toolCalls'] as List;
+      expect(saved, hasLength(2));
+      final followUpInput = h.bodies[1]['input'] as List;
+      final calls = followUpInput
+          .where((i) => i is Map && i['type'] == 'function_call')
+          .toList();
+      expect(calls.map((c) => (c as Map)['call_id']), ['call_a', 'call_b']);
+      final outputs = followUpInput
+          .where((i) => i is Map && i['type'] == 'function_call_output')
+          .toList();
+      expect(outputs.map((o) => (o as Map)['call_id']), ['call_a', 'call_b']);
+    });
+
+    test('output_item.done does not re-emit a call completed via '
+        'output_index argument events', () async {
+      String addedFirstRound() => [
+        evt({
+          'type': 'response.created',
+          'response': {'id': 'resp_1'},
+        }),
+        evt({
+          'type': 'response.output_item.added',
+          'item': {
+            'type': 'function_call',
+            'id': 'fc1',
+            'call_id': 'call_a',
+            'name': 'write_text',
+            'arguments': '',
+          },
+        }),
+        evt({
+          'type': 'response.function_call_arguments.done',
+          'output_index': 0,
+          'name': 'write_text',
+          'arguments': '{"text":"A","element_id":"a"}',
+        }),
+        evt({
+          'type': 'response.output_item.done',
+          'item': {
+            'type': 'function_call',
+            'id': 'fc1',
+            'call_id': 'call_a',
+            'name': 'write_text',
+            'arguments': '{"text":"A","element_id":"a"}',
+          },
+        }),
+        evt({
+          'type': 'response.completed',
+          'response': {'id': 'resp_1', 'output': []},
+        }),
+        'data: [DONE]\n\n',
+      ].join();
+      final h = sequence([addedFirstRound(), textRound('resp_2', 'Done')]);
+      final executed = <String>[];
+      final events = await AiClient('key', client: h.client)
+          .streamTurn(
+            videoBase64: '',
+            model: 'test-model',
+            history: const [],
+            executeToolCall: (name, args) async {
+              executed.add('${args['element_id']}');
+              return const AiToolResult.success('done');
+            },
+          )
+          .toList();
+      expect(executed, ['a']);
+      expect(events.whereType<AiToolCallComplete>(), hasLength(1));
+      final saved = (events.last as AiStreamDone).raw['toolCalls'] as List;
+      expect(saved, hasLength(1));
+      expect((saved.single as Map)['id'], 'call_a');
+    });
+
+    test('release shape: call_id only on item/terminal events and '
+        '80 vs 80.0 argument formatting executes exactly once', () async {
+      // What the real provider does in release builds: argument
+      // events key by output_index with no item_id/call_id, the item
+      // and terminal events key by item id, call_id arrives only
+      // there, and the terminal arguments reserialise numbers
+      // (80 -> 80.0). Every layer used to be able to mistake the
+      // terminal copy for a new call and execute it a second time.
+      String round() => [
+        evt({
+          'type': 'response.created',
+          'response': {'id': 'resp_1'},
+        }),
+        evt({
+          'type': 'response.function_call_arguments.delta',
+          'output_index': 0,
+          'delta': '{"text":"A","element_id":"a","x":80,',
+        }),
+        evt({
+          'type': 'response.function_call_arguments.done',
+          'output_index': 0,
+          'name': 'write_text',
+          'arguments': '{"text":"A","element_id":"a","x":80,"y":100}',
+        }),
+        evt({
+          'type': 'response.output_item.done',
+          'output_index': 0,
+          'item': {
+            'type': 'function_call',
+            'id': 'fc1',
+            'call_id': 'call_a',
+            'name': 'write_text',
+            'arguments': '{"text":"A","element_id":"a","x":80.0,"y":100.0}',
+          },
+        }),
+        evt({
+          'type': 'response.completed',
+          'response': {
+            'id': 'resp_1',
+            'output': [
+              {
+                'type': 'function_call',
+                'id': 'fc1',
+                'call_id': 'call_a',
+                'name': 'write_text',
+                'arguments': '{"text":"A","element_id":"a","x":80.0,"y":100.0}',
+              },
+            ],
+          },
+        }),
+        'data: [DONE]\n\n',
+      ].join();
+      final h = sequence([round(), textRound('resp_2', 'Done')]);
+      final executed = <String>[];
+      final events = await AiClient('key', client: h.client)
+          .streamTurn(
+            videoBase64: '',
+            model: 'test-model',
+            history: const [],
+            executeToolCall: (name, args) async {
+              executed.add('${args['element_id']}');
+              return const AiToolResult.success('done');
+            },
+          )
+          .toList();
+      expect(executed, ['a']);
+      expect(events.whereType<AiToolCallComplete>(), hasLength(1));
+      final saved = (events.last as AiStreamDone).raw['toolCalls'] as List;
+      expect(saved, hasLength(1));
+      expect((saved.single as Map)['id'], 'call_a');
+      final followUpInput = h.bodies[1]['input'] as List;
+      final outputs = followUpInput
+          .where((i) => i is Map && i['type'] == 'function_call_output')
+          .toList();
+      expect(outputs, hasLength(1));
+    });
+
+    test('terminal copy of a call with reordered argument keys '
+        'does not execute it twice', () async {
+      String reorderedRound() => [
+        evt({
+          'type': 'response.created',
+          'response': {'id': 'resp_1'},
+        }),
+        evt({
+          'type': 'response.function_call_arguments.done',
+          'output_index': 0,
+          'name': 'write_text',
+          'arguments': '{"element_id":"a","text":"A"}',
+        }),
+        evt({
+          'type': 'response.completed',
+          'response': {
+            'id': 'resp_1',
+            'output': [
+              {
+                'type': 'function_call',
+                'id': 'fc1',
+                'call_id': 'call_a',
+                'name': 'write_text',
+                // Same arguments, serialised in a different order.
+                'arguments': '{"text":"A","element_id":"a"}',
+              },
+            ],
+          },
+        }),
+        'data: [DONE]\n\n',
+      ].join();
+      final h = sequence([reorderedRound(), textRound('resp_2', 'Done')]);
+      final executed = <String>[];
+      final events = await AiClient('key', client: h.client)
+          .streamTurn(
+            videoBase64: '',
+            model: 'test-model',
+            history: const [],
+            executeToolCall: (name, args) async {
+              executed.add('${args['element_id']}');
+              return const AiToolResult.success('done');
+            },
+          )
+          .toList();
+      expect(executed, ['a']);
+      expect(events.whereType<AiToolCallComplete>(), hasLength(1));
+      expect((events.last as AiStreamDone).raw['toolCalls'], hasLength(1));
+    });
+
+    test('reasoning that only gains encrypted_content on the '
+        'terminal event is still replayed, before the calls', () async {
+      String lateReasoningRound() => [
+        evt({
+          'type': 'response.created',
+          'response': {'id': 'resp_1'},
+        }),
+        evt({
+          'type': 'response.output_item.done',
+          'item': {'type': 'reasoning', 'id': 'rs_1', 'summary': []},
+        }),
+        evt({
+          'type': 'response.output_item.done',
+          'item': {
+            'type': 'function_call',
+            'id': 'fc1',
+            'call_id': 'call_a',
+            'name': 'write_text',
+            'arguments': '{"text":"A","element_id":"a"}',
+          },
+        }),
+        evt({
+          'type': 'response.completed',
+          'response': {
+            'id': 'resp_1',
+            'output': [
+              {
+                'type': 'reasoning',
+                'id': 'rs_1',
+                'summary': [],
+                'encrypted_content': 'ENC1',
+              },
+            ],
+          },
+        }),
+        'data: [DONE]\n\n',
+      ].join();
+      final h = sequence([lateReasoningRound(), textRound('resp_2', 'Done')]);
+      final events = await AiClient('key', client: h.client)
+          .streamTurn(
+            videoBase64: '',
+            model: 'test-model',
+            history: const [],
+            executeToolCall: (name, args) async =>
+                const AiToolResult.success('done'),
+          )
+          .toList();
+      final done = events.last as AiStreamDone;
+      final items = done.raw['items'] as List;
+      expect(items.first['kind'], 'reasoning');
+      expect(items.first['encrypted_content'], 'ENC1');
+      // And in the self-contained follow-up the reasoning precedes
+      // the function call it reasoned about.
+      final followInput = h.bodies[1]['input'] as List;
+      final reasoningAt = followInput.indexWhere(
+        (i) => i is Map && i['type'] == 'reasoning',
+      );
+      final callAt = followInput.indexWhere(
+        (i) => i is Map && i['type'] == 'function_call',
+      );
+      expect(reasoningAt, isNonNegative);
+      expect(reasoningAt < callAt, isTrue);
+    });
+
+    test('a completed tool call starts executing before the rest of '
+        'its response has streamed', () async {
+      String callThenTextRound() => [
+        evt({
+          'type': 'response.created',
+          'response': {'id': 'resp_1'},
+        }),
+        evt({
+          'type': 'response.output_item.done',
+          'item': {
+            'type': 'function_call',
+            'id': 'fc1',
+            'call_id': 'call_write_math',
+            'name': 'write_math',
+            'arguments': '{"latex":"x^2"}',
+          },
+        }),
+        evt({'type': 'response.output_text.delta', 'delta': 'After'}),
+        evt({
+          'type': 'response.completed',
+          'response': {'id': 'resp_1', 'output': []},
+        }),
+        'data: [DONE]\n\n',
+      ].join();
+      final h = sequence([callThenTextRound(), textRound('resp_2', 'Done')]);
+      var sawTrailingText = false;
+      bool? executedBeforeTrailingText;
+      final events = <AiEvent>[];
+      await for (final event in AiClient('key', client: h.client).streamTurn(
+        videoBase64: '',
+        model: 'test-model',
+        history: const [],
+        executeToolCall: (name, args) async {
+          executedBeforeTrailingText = !sawTrailingText;
+          return const AiToolResult.success('performed');
+        },
+      )) {
+        events.add(event);
+        if (event is AiTextDelta && event.text == 'After') {
+          sawTrailingText = true;
+        }
+      }
+      // The call was already being performed while the model was
+      // still streaming the text that followed it in the same reply.
+      expect(executedBeforeTrailingText, isTrue);
+      expect(events.whereType<AiTextDelta>().map((e) => e.text), [
+        'After',
+        'Done',
+      ]);
+      expect(h.bodies, hasLength(2));
     });
 
     test('a turn after pending tool outputs replays history (with the '
@@ -827,17 +1368,87 @@ void main() {
           .toList();
 
       expect(executed, ['write_text']);
+      // In this fixture the output_item.added event already carried
+      // the call_id, so the completed call has it from the start;
+      // the next test covers streams where it only arrives on
+      // response.completed. Either way the result is sent back under
+      // the real id, which is also the id persisted with the call.
       expect(
         events.whereType<AiToolCallComplete>().single.callId,
         'call_write_text',
       );
-      // The call succeeded, so no result is sent back in this turn;
-      // the real call_id is still the one persisted with the call.
-      expect(h.bodies, hasLength(1));
+      expect(h.bodies, hasLength(2));
+      final followUpInput = h.bodies[1]['input'] as List;
+      final outputItem = followUpInput.firstWhere(
+        (i) => i is Map && i['type'] == 'function_call_output',
+      ) as Map;
+      expect(outputItem['call_id'], 'call_write_text');
       final savedCall =
           ((events.last as AiStreamDone).raw['toolCalls'] as List).single
               as Map;
       expect(savedCall['id'], 'call_write_text');
+      expect((events.last as AiStreamDone).fullText, 'Done');
+    });
+
+    test('a call whose call_id only arrives on response.completed '
+        'still executes mid-stream and is answered under that id', () async {
+      String lateIdRound() => [
+        evt({
+          'type': 'response.created',
+          'response': {'id': 'resp_1'},
+        }),
+        evt({
+          'type': 'response.function_call_arguments.done',
+          'item_id': 'fc1',
+          'name': 'write_text',
+          'arguments': '{"text":"Functions"}',
+        }),
+        evt({'type': 'response.output_text.delta', 'delta': 'After'}),
+        evt({
+          'type': 'response.completed',
+          'response': {
+            'id': 'resp_1',
+            'output': [
+              {
+                'type': 'function_call',
+                'id': 'fc1',
+                'call_id': 'call_write_text',
+                'name': 'write_text',
+                'arguments': '{"text":"Functions"}',
+              },
+            ],
+          },
+        }),
+        'data: [DONE]\n\n',
+      ].join();
+      final h = sequence([lateIdRound(), textRound('resp_2', 'Done')]);
+      var sawTrailingText = false;
+      bool? executedBeforeTrailingText;
+      final executed = <String>[];
+      await for (final event in AiClient('key', client: h.client).streamTurn(
+        videoBase64: '',
+        model: 'test-model',
+        history: const [],
+        executeToolCall: (name, args) async {
+          executed.add(name);
+          executedBeforeTrailingText = !sawTrailingText;
+          return const AiToolResult.success('performed');
+        },
+      )) {
+        if (event is AiTextDelta && event.text == 'After') {
+          sawTrailingText = true;
+        }
+      }
+      expect(executed, ['write_text']);
+      // Executed while the response was still streaming, despite the
+      // id only existing on the terminal event.
+      expect(executedBeforeTrailingText, isTrue);
+      expect(h.bodies, hasLength(2));
+      final followUpInput = h.bodies[1]['input'] as List;
+      final outputItem = followUpInput.firstWhere(
+        (i) => i is Map && i['type'] == 'function_call_output',
+      ) as Map;
+      expect(outputItem['call_id'], 'call_write_text');
     });
 
     test('a failing tool call that never receives a call_id fails '
@@ -881,14 +1492,15 @@ void main() {
           ),
         ),
       );
-      // The call was performed (that is how its failure is known), but
-      // no follow-up request was sent with an invented id.
+      // The call was performed as soon as it completed (execution
+      // needs no id); only the follow-up cannot be sent, and no
+      // request carries an invented id.
       expect(executed, 1);
       expect(h.bodies, hasLength(1));
     });
 
-    test('a successful tool call without a call_id ends the turn '
-        'normally', () async {
+    test('a successful tool call without a call_id also fails, since '
+        'its result must be sent back too', () async {
       final noIdRound = [
         evt({
           'type': 'response.created',
@@ -906,20 +1518,30 @@ void main() {
         }),
         'data: [DONE]\n\n',
       ].join();
-      final h = sequence([noIdRound]);
-      final events = await AiClient('key', client: h.client)
-          .streamTurn(
-            videoBase64: '',
-            model: 'test-model',
-            history: const [],
-            executeToolCall: (name, args) async =>
-                const AiToolResult.success('performed'),
-          )
-          .toList();
-      // Nothing is sent back on success, so the missing id never
-      // reaches the API.
+      final h = sequence([noIdRound, textRound('resp_2', 'Done')]);
+      var executed = 0;
+      await expectLater(
+        AiClient('key', client: h.client)
+            .streamTurn(
+              videoBase64: '',
+              model: 'test-model',
+              history: const [],
+              executeToolCall: (name, args) async {
+                executed++;
+                return const AiToolResult.success('performed');
+              },
+            )
+            .toList(),
+        throwsA(
+          isA<Exception>().having(
+            (e) => e.toString(),
+            'message',
+            contains('call id'),
+          ),
+        ),
+      );
+      expect(executed, 1);
       expect(h.bodies, hasLength(1));
-      expect(events.last, isA<AiStreamDone>());
     });
 
     test(
@@ -938,17 +1560,22 @@ void main() {
 
         final followUp = h.bodies[1];
         final output =
-            ((followUp['input'] as List).single as Map)['output'] as String;
+            ((followUp['input'] as List).firstWhere(
+                  (i) => i is Map && i['type'] == 'function_call_output',
+                ) as Map)['output']
+                as String;
         expect(output, contains('"status":"error"'));
         expect(output, contains('no such element'));
         expect((events.last as AiStreamDone).fullText, 'Recovered');
       },
     );
 
-    // Regression: dart_openai closes the client handed to createStream
-    // when the stream ends. With a real (close-sensitive) transport the
-    // function_call_output round used to fail with "Client is already
-    // closed"; MockClient hides that because its close() is a no-op.
+    // Regression: a streaming SDK used to close the client handed to
+    // it when the stream ended. With a real (close-sensitive)
+    // transport the function_call_output round used to fail with
+    // "Client is already closed"; MockClient hides that because its
+    // close() is a no-op. The direct SSE client must never close the
+    // shared transport between rounds.
     test('failure follow-up survives a transport that refuses reuse '
         'after close', () async {
       final h = sequence([toolRound(), textRound('resp_2', 'Done')]);
@@ -967,8 +1594,7 @@ void main() {
       expect((events.last as AiStreamDone).fullText, 'Done');
     });
 
-    test('sequential failing rounds keep chaining on the newest '
-        'response id', () async {
+    test('sequential rounds accumulate self-contained follow-ups', () async {
       final h = sequence([
         toolRound(),
         toolRound().replaceAll('resp_1', 'resp_2'),
@@ -982,19 +1608,179 @@ void main() {
             history: const [],
             executeToolCall: (name, args) async {
               calls++;
-              return AiToolResult.failure('step $calls failed');
+              return AiToolResult.success('step $calls done');
             },
           )
           .toList();
 
       expect(calls, 2);
       expect(h.bodies, hasLength(3));
-      expect(h.bodies[1]['previous_response_id'], 'resp_1');
-      expect(h.bodies[2]['previous_response_id'], 'resp_2');
-      expect((events.last as AiStreamDone).responseId, 'resp_3');
+      for (final body in h.bodies) {
+        expect(body['store'], isFalse);
+        expect(body.containsKey('previous_response_id'), isFalse);
+      }
+      // Second follow-up carries both rounds' outputs.
+      final secondFollowUp = h.bodies[2]['input'] as List;
+      expect(
+        secondFollowUp
+            .where((i) => i is Map && i['type'] == 'function_call_output')
+            .length,
+        2,
+      );
+      expect((events.last as AiStreamDone).responseId, isNull);
     });
 
-    test('past the video window a failing tool is answered with a '
+    test('non-chained request asks for encrypted reasoning and '
+        'replay preserves round order', () async {
+      String reasoningToolRound() => [
+        evt({
+          'type': 'response.created',
+          'response': {'id': 'resp_1'},
+        }),
+        evt({
+          'type': 'response.output_item.done',
+          'item': {
+            'type': 'reasoning',
+            'id': 'rs_1',
+            'summary': [],
+            'encrypted_content': 'ENC1',
+          },
+        }),
+        evt({'type': 'response.output_text.delta', 'delta': 'First '}),
+        evt({
+          'type': 'response.output_item.done',
+          'item': {
+            'type': 'function_call',
+            'id': 'fc1',
+            'call_id': 'call_a',
+            'name': 'write_text',
+            'arguments': '{"text":"A"}',
+          },
+        }),
+        evt({
+          'type': 'response.completed',
+          'response': {'id': 'resp_1', 'output': []},
+        }),
+        'data: [DONE]\n\n',
+      ].join();
+      final h = sequence([reasoningToolRound(), textRound('resp_2', 'Second')]);
+      final events = await AiClient('key', client: h.client)
+          .streamTurn(
+            videoBase64: '',
+            model: 'test-model',
+            history: const [],
+            executeToolCall: (n, a) async => const AiToolResult.success('ok'),
+          )
+          .toList();
+      expect(h.bodies[0]['include'], ['reasoning.encrypted_content']);
+      // Stateless follow-up also requests encrypted reasoning and
+      // never sends previous_response_id.
+      expect(h.bodies[1]['include'], ['reasoning.encrypted_content']);
+      expect(h.bodies[1].containsKey('previous_response_id'), isFalse);
+      expect(events.whereType<AiReasoningComplete>(), hasLength(1));
+      final done = events.last as AiStreamDone;
+      final items = done.raw['items'] as List;
+      expect(items.map((i) => (i as Map)['kind']), [
+        'reasoning',
+        'text',
+        'toolCall',
+        'text',
+      ]);
+      // Replay that persisted message in a fresh (non-chained) turn:
+      // reasoning -> text -> call -> output, in original order.
+      final h2 = harness(
+        sse: 'data: {"type":"response.output_text.delta","delta":"ok"}\n\ndata: [DONE]\n\n',
+      );
+      await turn(
+        AiClient('key', client: h2.client),
+        history: [
+          ChatMessage(
+            id: 'a1',
+            sessionId: 's1',
+            role: 'ai',
+            kind: 'actions',
+            payloadJson: jsonEncode({...done.raw, 'responseId': null}),
+            createdAt: DateTime(2026),
+          ),
+          message('user', {'text': 'next'}),
+        ],
+      ).toList();
+      final input = h2.lastBody()['input'] as List;
+      expect(input[0], {
+        'type': 'reasoning',
+        'id': 'rs_1',
+        'summary': [],
+        'encrypted_content': 'ENC1',
+      });
+      expect((input[1] as Map)['role'], 'assistant');
+      expect((input[2] as Map)['type'], 'function_call');
+      expect((input[3] as Map)['type'], 'function_call_output');
+      expect((input[3] as Map)['call_id'], 'call_a');
+    });
+
+    test('history replay keeps text between tool calls separate '
+        'and in order', () async {
+      final h = harness(
+        sse: 'data: {"type":"response.output_text.delta","delta":"ok"}\n\ndata: [DONE]\n\n',
+      );
+      await turn(
+        AiClient('key', client: h.client),
+        history: [
+          message('ai', {
+            'text': 'Before. After.',
+            'items': [
+              {'kind': 'text', 'text': 'Before.'},
+              {
+                'kind': 'toolCall',
+                'id': 'call_a',
+                'name': 'write_text',
+                'args': {'element_id': 'a'},
+                'output': '{"status":"success"}',
+              },
+              {'kind': 'text', 'text': 'After.'},
+              {
+                'kind': 'toolCall',
+                'id': 'call_b',
+                'name': 'write_math',
+                'args': {'element_id': 'b'},
+                'output': '{"status":"success"}',
+              },
+            ],
+          }),
+          message('user', {'text': 'next'}),
+        ],
+      ).toList();
+      final input = h.lastBody()['input'] as List;
+      final kinds = [
+        for (final i in input)
+          if (i is Map) i['type'] ?? i['role'],
+      ];
+      expect(kinds.sublist(0, 6), [
+        'assistant',
+        'function_call',
+        'function_call_output',
+        'assistant',
+        'function_call',
+        'function_call_output',
+      ]);
+      expect(((input[0] as Map)['content'] as List).single['text'], 'Before.');
+      expect(((input[3] as Map)['content'] as List).single['text'], 'After.');
+    });
+
+    test('trailing reasoning gets a minimal assistant item before '
+        'the next user message', () {
+      final out = aiItemsToInput([
+        {
+          'kind': 'reasoning',
+          'id': 'rs_x',
+          'summary': [],
+          'encrypted_content': 'E',
+        },
+      ], 'a1');
+      expect(out.last['role'], 'assistant');
+    });
+
+    test('past the video window tool results are answered with a '
         'self-contained, non-stored follow-up', () async {
       final h = sequence([toolRound(), textRound('resp_2', 'Recovered')]);
       // Five saved student video turns plus the current one: replay
@@ -1009,7 +1795,7 @@ void main() {
             model: 'test-model',
             history: history,
             executeToolCall: (name, args) async =>
-                const AiToolResult.failure('no such element'),
+                const AiToolResult.success('write_math performed.'),
           )
           .toList();
 
@@ -1034,7 +1820,7 @@ void main() {
         (item) => item is Map && item['type'] == 'function_call_output',
       ) as Map;
       expect(output['call_id'], 'call_write_math');
-      expect(output['output'], contains('no such element'));
+      expect(output['output'], contains('write_math performed.'));
       final done = events.last as AiStreamDone;
       expect(done.fullText, 'Recovered');
       expect(done.responseId, isNull);

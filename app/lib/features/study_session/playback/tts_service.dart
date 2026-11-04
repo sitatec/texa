@@ -4,6 +4,7 @@ import 'dart:collection';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 
+import '../debug_log.dart';
 import 'speech_chunker.dart';
 import 'wav_builder.dart';
 
@@ -42,6 +43,10 @@ class SpeechSpeaker {
     }
     _stopped = false;
     _queue.add(t);
+    texaDiag(
+      'tts',
+      'enqueue ${diagText(t)} queued=${_queue.length} running=$_running',
+    );
     _idle ??= Completer<void>();
     if (!_running) {
       unawaited(_run());
@@ -78,6 +83,7 @@ class SpeechSpeaker {
         nextStream = _startSynth(nextChunk);
       }
       var spoke = false;
+      texaDiag('tts', 'chunk start ${diagText(chunk)} queued=${_queue.length}');
       try {
         await for (final wav in stream) {
           if (_stopped) break;
@@ -91,12 +97,17 @@ class SpeechSpeaker {
       } catch (e) {
         debugPrint('Texa TTS playback: $e');
       }
+      texaDiag(
+        'tts',
+        'chunk end ${diagText(chunk)} spoke=$spoke stopped=$_stopped',
+      );
       if (!spoke) {
         // A chunk that failed to synthesise is skipped, not faked: the
         // caption never shows text that is not actually being spoken.
         debugPrint('Texa TTS: skipping chunk that failed to synthesise');
       }
     }
+    texaDiag('tts', 'run end stopped=$_stopped queued=${_queue.length}');
     _running = false;
     currentChunk.value = null;
     final idle = _idle;
@@ -142,6 +153,10 @@ class SpeechSpeaker {
 
   /// Stops within one chunk: audio halts now, the queue is cleared.
   Future<void> stop() async {
+    texaDiag(
+      'tts',
+      'stop queued=${_queue.length} current=${currentChunk.value == null ? 'none' : diagText(currentChunk.value!)}',
+    );
     _stopped = true;
     _queue.clear();
     currentChunk.value = null;

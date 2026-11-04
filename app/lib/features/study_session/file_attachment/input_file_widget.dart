@@ -644,7 +644,17 @@ class TexaUploadedFilePreview extends StatelessWidget {
               ),
             ),
             clipBehavior: Clip.antiAlias,
-            child: _UploadedThumbnailContent(upload: upload),
+            child: InkWell(
+              child: _UploadedThumbnailContent(upload: upload),
+              onTap: () {
+                showDialog(
+                  context: context,
+                  builder: (context) => Dialog.fullscreen(
+                    child: _UploadedThumbnailContent(upload: upload),
+                  ),
+                );
+              },
+            ),
           ),
           const SizedBox(height: 4),
           Text(
@@ -721,7 +731,45 @@ class _FileGridCell extends StatelessWidget {
                   ),
                 ),
                 clipBehavior: Clip.antiAlias,
-                child: _FileThumbnailContent(file: file, large: true),
+                child: InkWell(
+                  onTap: file.type == .image
+                      ? () {
+                          showDialog(
+                            context: context,
+                            builder: (context) => Dialog.fullscreen(
+                              child: Stack(
+                                alignment: .center,
+                                children: [
+                                  _FileThumbnailContent(
+                                    file: file,
+                                    large: true,
+                                    fit: .contain,
+                                  ),
+                                  Positioned(
+                                    top: 8,
+                                    right: 8,
+                                    child: IconButton(
+                                      onPressed: Navigator.of(context).pop,
+                                      icon: Icon(
+                                        Symbols.close,
+                                        color: theme.colorScheme.surface,
+                                      ),
+                                      style: IconButton.styleFrom(
+                                        backgroundColor: theme
+                                            .colorScheme
+                                            .onSurface
+                                            .withValues(alpha: 0.4),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }
+                      : null,
+                  child: _FileThumbnailContent(file: file, large: true),
+                ),
               ),
             ),
             const SizedBox(height: 6),
@@ -754,9 +802,14 @@ class _FileGridCell extends StatelessWidget {
 }
 
 class _FileThumbnailContent extends StatelessWidget {
-  const _FileThumbnailContent({required this.file, this.large = false});
+  const _FileThumbnailContent({
+    required this.file,
+    this.large = false,
+    this.fit = .cover,
+  });
   final TexaLocalFile file;
   final bool large;
+  final BoxFit fit;
 
   @override
   Widget build(BuildContext context) {
@@ -765,7 +818,7 @@ class _FileThumbnailContent extends StatelessWidget {
         future: file.data.readAsBytes(),
         builder: (context, snapshot) {
           if (snapshot.hasData) {
-            return Image.memory(snapshot.data!, fit: BoxFit.cover);
+            return Image.memory(snapshot.data!, fit: fit);
           }
           return const Center(
             child: SizedBox(

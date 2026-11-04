@@ -174,22 +174,27 @@ List<Map<String, dynamic>> toolSchemas() {
     ),
     tool(
       'plot_function',
-      'Plot one or more analytic functions of x on-device, on shared axes. For a single function use expression. To plot several functions on the SAME plot (e.g. to compare them or show where they intersect) pass them all in ONE call via expressions - never make separate plot_function calls at the same position for that, as each separate plot gets its own axes and auto-scaled y-range so the curves would not be comparable. All functions in expressions share the same x/y ranges. Give each a distinct color and a short label for the legend (e.g. f, g), then use mark_landmarks with "intersections" on this element to mark exactly where they cross.',
+      'Plot one or more analytic functions of x on-device, on shared axes. Always pass the function(s) in expressions: a single function is a one-item array, and several functions to compare or show intersecting go in the SAME call as multiple items - never make separate plot_function calls at the same position for that, as each separate plot gets its own axes and auto-scaled y-range so the curves would not be comparable. All functions in expressions share the same x/y ranges. Give each a distinct color and a short label for the legend (e.g. f, g), then use mark_landmarks with "intersections" on this element to mark exactly where they cross.',
       props(
-        ['element_id', 'x', 'y', 'width', 'height', 'x_min', 'x_max'],
+        [
+          'element_id',
+          'x',
+          'y',
+          'width',
+          'height',
+          'x_min',
+          'x_max',
+          'expressions',
+        ],
         {
           'element_id': id,
           'x': num,
           'y': num,
           'width': num,
           'height': num,
-          'expression': {
-            'type': 'string',
-            'description': 'Single function of x, e.g. "x^2-4". Use this OR expressions, not both.',
-          },
           'expressions': {
             'type': 'array',
-            'description': 'Two or more functions to draw together on this one plot. Prefer objects so each curve has its own colour and legend label.',
+            'description': 'The function(s) of x to draw on this plot: one item for a single function, multiple items for functions drawn together on shared axes. Prefer objects so each curve has its own colour and legend label.',
             'items': {
               'type': 'object',
               'properties': {
@@ -211,7 +216,6 @@ List<Map<String, dynamic>> toolSchemas() {
           'x_max': num,
           'y_min': num,
           'y_max': num,
-          'color': str,
           'explanation_speech': speech,
         },
       ),
@@ -247,7 +251,6 @@ List<Map<String, dynamic>> toolSchemas() {
           'text': str,
           'latex': str,
           'svg': str,
-          'expression': str,
           'expressions': {
             'type': 'array',
             'description': 'For a plot element: replacement functions of x to draw together on it, replacing its current functions. Items are objects with expression plus optional color/label, as in plot_function.',
@@ -280,14 +283,18 @@ List<Map<String, dynamic>> toolSchemas() {
     ),
     tool(
       'focus_viewport',
-      'Move the camera to a board rect or one of your elements, drawing nothing.',
+      'Move the camera to a board rect or to one or more of your elements, drawing nothing. When the student needs to see multiple related elements at once (e.g. a problem statement together with its equation, or similar cases), pass all of their element_ids together in one call so they are framed together in a single view, but you can also pass a single element id to focus only tha one.',
       props([], {
         'x': num,
         'y': num,
         'width': num,
         'height': num,
         'zoom': num,
-        'element_id': id,
+        'element_ids': {
+          'type': 'array',
+          'items': {'type': 'string'},
+          'description': 'Element ids to frame together: the camera fits the area covering all of them at once. Prefer this over element_id whenever related elements should be seen together.',
+        },
         'explanation_speech': speech,
       }),
     ),

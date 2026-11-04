@@ -8,6 +8,7 @@ import '../../core/constants.dart';
 import 'ai/ai_actions.dart';
 import 'board/board_models.dart';
 import 'board/landmarks.dart';
+import 'debug_log.dart';
 
 /// Owns board elements, the AI registry, undo/redo and the camera.
 class BoardController extends ChangeNotifier {
@@ -306,6 +307,20 @@ class BoardController extends ChangeNotifier {
   }
 
   Rect? rectForArgs(Map<String, dynamic> a) {
+    // Multiple element ids (focus_viewport framing related elements
+    // together): the target is the union of their rects, and it wins
+    // over any single-element or coordinate target also supplied.
+    final ids = a['element_ids'];
+    if (ids is List && ids.isNotEmpty) {
+      Rect? union;
+      for (final rawId in ids) {
+        final rect = registry[rawId.toString()]?.rect;
+        if (rect != null) {
+          union = union?.expandToInclude(rect) ?? rect;
+        }
+      }
+      if (union != null) return union;
+    }
     // Explicit coordinates win over the registry: a create (or an edit
     // that moves an element) reusing an existing element_id is heading
     // for the NEW x/y, not the rect that id currently occupies. The
@@ -330,17 +345,61 @@ class BoardController extends ChangeNotifier {
   /// the raw arguments (text is re-measured, edits can move elements),
   /// so when the real rect lands largely outside it the camera must
   /// move again or the new content sits off-screen.
-  Future<void> frameRectUnlessCovered(Rect target, Rect? alreadyFramed) async {
+  Future<void> frameRectUnlessCovered(
+    Rect target,
+    Rect? alreadyFramed, {
+    String source = 'post',
+  }) async {
     if (alreadyFramed != null) {
       final overlap = alreadyFramed.intersect(target);
       final area = target.width * target.height;
       if (area > 0 &&
           !overlap.isEmpty &&
           overlap.width * overlap.height >= area * 0.5) {
+        texaDiag(
+          'camera',
+          'skip source=$source reason=covered target=$target alreadyFramed=$alreadyFramed',
+        );
         return;
       }
     }
-    await frameRect(clampToBoard(target));
+    // Stronger skip: the pre-action move already put the camera where
+    // this rect is comfortably on screen (the predicted and applied
+    // rects routinely differ in size - text is measured on apply - so
+    // raw-rect overlap still allowed a second, visible zoom). Only an
+    // applied rect that is actually off/near the edge needs a move.
+    if (alreadyFramed != null && isRectComfortablyVisible(target)) {
+      texaDiag(
+        'camera',
+        'skip source=$source reason=visible target=$target visible=${visibleBoardRect()}',
+      );
+      return;
+    }
+    await frameRect(clampToBoard(target), source: source);
+  }
+
+  /// The board-space rect currently shown by the viewport.
+  Rect visibleBoardRect() {
+    final scale = transform.value.storage[0].abs();
+    final safe = scale > 0 ? scale : 1.0;
+    final t = transform.value.getTranslation();
+    return Rect.fromLTWH(
+      -t.x / safe,
+      -t.y / safe,
+      viewportSize.width / safe,
+      viewportSize.height / safe,
+    );
+  }
+
+  /// True when [target] sits inside the visible rect with a margin -
+  /// i.e. a framing move would only re-centre/re-zoom on content the
+  /// student can already see whole.
+  bool isRectComfortablyVisible(Rect target) {
+    final visible = visibleBoardRect();
+    return target.left >= visible.left + visible.width * 0.08 &&
+        target.top >= visible.top + visible.height * 0.08 &&
+        target.right <= visible.right - visible.width * 0.08 &&
+        target.bottom <= visible.bottom - visible.height * 0.08;
   }
 
   /// The one text style board text is both measured and rendered with.
@@ -401,12 +460,13 @@ class BoardController extends ChangeNotifier {
       final toEdge = (boardWidth - x).clamp(80.0, boardWidth);
       final natural = measureBoardText(text, fs, double.infinity).width;
       // Breathing room: a box exactly as wide as the measured text can
-      // still wrap its last glyph when the widget re-lays it out (font
-      // fallback, sub-pixel rounding), so single-line text gets a small
-      // slack - a fraction of the font size, at least a few pixels. An
-      // explicit width from the model is an intentional wrap width and
-      // is used as-is.
-      final breathingRoom = math.max(4.0, fs * 0.2);
+      // still wrap when the widget re-lays it out. Small font-metric,
+      // fallback and sub-pixel differences accumulate per glyph/space,
+      // so the slack must scale with the measured line as well as the
+      // font size; a fixed few pixels is enough for a couple of words
+      // but not for a longer sentence. An explicit width from the model
+      // is an intentional wrap width and is used as-is.
+      final breathingRoom = math.max(fs * 0.35, natural * 0.08);
       final width = requestedWidth == null
           ? (natural + breathingRoom).clamp(1.0, toEdge)
           : requestedWidth.clamp(1.0, toEdge);
@@ -440,6 +500,44 @@ class BoardController extends ChangeNotifier {
       fontSize: fontSize,
       requestedWidth: requestedWidth,
     ).rect;
+  }
+
+  /// Ramps every element that is still mid-entrance (progress < 1)
+  /// to fully drawn over [duration], and returns. Elements that are
+  /// already complete are never touched: an action that *targets* an
+  /// existing element (mark_landmarks on a plot, point_at, ...) must
+  /// not restart that element's entrance - resetting a plot's
+  /// progress to 0 erases its curves from the canvas, and a repaint
+  /// landing in that window could leave them erased. Which elements
+  /// enter is decided by the action itself, which sets progress 0 on
+  /// exactly the element it creates, edits or marks.
+  Future<void> animateEntering({
+    bool Function()? isCancelled,
+    Duration duration = const Duration(milliseconds: 450),
+  }) async {
+    final targets = [
+      for (final e in elements)
+        if (e.progress < 1) (e, e.progress),
+    ];
+    if (targets.isEmpty) return;
+    final stepMs = duration.inMilliseconds ~/ 28;
+    final sw = Stopwatch()..start();
+    while (sw.elapsedMilliseconds < duration.inMilliseconds) {
+      if (isCancelled?.call() ?? false) return;
+      final t = (sw.elapsedMilliseconds / duration.inMilliseconds)
+          .clamp(0, 1)
+          .toDouble();
+      for (final (e, start) in targets) {
+        e.progress = start + (1 - start) * t;
+      }
+      notifyListeners();
+      await Future<void>.delayed(Duration(milliseconds: stepMs));
+    }
+    if (isCancelled?.call() ?? false) return;
+    for (final (e, _) in targets) {
+      e.progress = 1;
+    }
+    notifyListeners();
   }
 
   /// Applies one AI action to the board. Returns its rect, or null to skip it.
@@ -675,9 +773,25 @@ class BoardController extends ChangeNotifier {
     }
   }
 
+  int _cameraAnimationGeneration = 0;
+
   /// Smoothly frames [rect] in the viewport unless the student took the camera.
-  Future<void> frameRect(Rect rect) async {
-    if (cameraTakenByStudent) return;
+  ///
+  /// A newer framing supersedes an in-flight one: the older loop stops
+  /// writing the transform instead of fighting the newer animation
+  /// from its own stale start matrix (two interleaved animations were
+  /// a visible zoom-out-then-in). The surviving animation starts from
+  /// wherever the camera actually is, and centre/scale interpolation
+  /// in [cameraMatrixAt] is monotonic, so one call is one direct move.
+  Future<void> frameRect(Rect rect, {String source = 'unknown'}) async {
+    if (cameraTakenByStudent) {
+      texaDiag(
+        'camera',
+        'skip source=$source reason=student-camera rect=$rect',
+      );
+      return;
+    }
+    final generation = ++_cameraAnimationGeneration;
     // Generous padding plus a breathing-room factor on the fitted
     // scale: framing used to fit only the viewport width with ~10%
     // padding (and could zoom to 2.5x), which felt far too tight -
@@ -691,23 +805,105 @@ class BoardController extends ChangeNotifier {
       viewportSize.height / padded.height,
     );
     final scale = (fitScale * 0.85).clamp(0.1, 2.0).toDouble();
-    final target = Matrix4.identity()
-      ..translateByDouble(viewportSize.width / 2, viewportSize.height / 2, 0, 1)
-      ..scaleByDouble(scale, scale, 1, 1)
-      ..translateByDouble(-padded.center.dx, -padded.center.dy, 0, 1);
     final start = transform.value.clone();
+    final startScale = start.storage[0].abs();
+    final startT = start.getTranslation();
+    final startCenter = Offset(
+      (viewportSize.width / 2 - startT.x) / (startScale > 0 ? startScale : 1),
+      (viewportSize.height / 2 - startT.y) / (startScale > 0 ? startScale : 1),
+    );
+    // Already framing this rect: a second animation to the same
+    // centre/scale is the other half of the reported double zoom.
+    if ((startCenter - padded.center).distance < 2 &&
+        ((startScale - scale).abs() / scale) < 0.02) {
+      texaDiag(
+        'camera',
+        'skip source=$source reason=already-framed rect=$rect center=${padded.center} scale=$scale',
+      );
+      return;
+    }
+    texaDiag(
+      'camera',
+      'start source=$source gen=$generation rect=$rect padded=$padded fromCenter=$startCenter fromScale=$startScale toCenter=${padded.center} toScale=$scale takenByStudent=$cameraTakenByStudent',
+    );
     final sw = Stopwatch()..start();
     while (sw.elapsedMilliseconds < 420) {
+      if (generation != _cameraAnimationGeneration) {
+        texaDiag(
+          'camera',
+          'superseded source=$source gen=$generation by=$_cameraAnimationGeneration at=${sw.elapsedMilliseconds}ms',
+        );
+        return;
+      }
       final t = Curves.easeInOut.transform(
         (sw.elapsedMilliseconds / 420).clamp(0, 1),
       );
-      transform.value = Matrix4Tween(
-        begin: start,
-        end: target,
-      ).evaluate(AlwaysStoppedAnimation(t));
+      transform.value = cameraMatrixAt(
+        start: start,
+        viewportSize: viewportSize,
+        targetCenter: padded.center,
+        targetScale: scale,
+        t: t,
+      );
       await Future<void>.delayed(const Duration(milliseconds: 16));
     }
-    transform.value = target;
+    if (generation != _cameraAnimationGeneration) {
+      texaDiag(
+        'camera',
+        'superseded source=$source gen=$generation by=$_cameraAnimationGeneration at=end',
+      );
+      return;
+    }
+    transform.value = cameraMatrixAt(
+      start: start,
+      viewportSize: viewportSize,
+      targetCenter: padded.center,
+      targetScale: scale,
+      t: 1,
+    );
+    texaDiag(
+      'camera',
+      'done source=$source gen=$generation center=${padded.center} scale=$scale elapsed=${sw.elapsedMilliseconds}ms',
+    );
+  }
+
+  /// The camera matrix part-way between [start] and a camera centred
+  /// on [targetCenter] at [targetScale], for [viewportSize].
+  ///
+  /// Interpolation happens in camera space - centre moves in a
+  /// straight line from the currently-viewed centre to the target
+  /// centre, and scale interpolates geometrically (monotonic: zooming
+  /// in never first zooms out, and vice versa). Interpolating raw
+  /// matrix entries instead made the viewed centre travel a curved
+  /// path (visibly drifting toward the middle, unzooming, then
+  /// zooming back in) whenever pan and zoom happened together.
+  static Matrix4 cameraMatrixAt({
+    required Matrix4 start,
+    required Size viewportSize,
+    required Offset targetCenter,
+    required double targetScale,
+    required double t,
+  }) {
+    // X-axis scale (the board camera is uniform, unrotated); unlike
+    // getMaxScaleOnAxis this ignores the untouched Z axis, which
+    // would otherwise report 1.0 for any zoom below 1.
+    final startScale = start.storage[0].abs();
+    final safeStartScale = startScale > 0 ? startScale : 1.0;
+    final translation = start.getTranslation();
+    final startCenter = Offset(
+      (viewportSize.width / 2 - translation.x) / safeStartScale,
+      (viewportSize.height / 2 - translation.y) / safeStartScale,
+    );
+    final clampedT = t.clamp(0.0, 1.0).toDouble();
+    final scale = math.exp(
+      math.log(safeStartScale) +
+          (math.log(targetScale) - math.log(safeStartScale)) * clampedT,
+    );
+    final center = Offset.lerp(startCenter, targetCenter, clampedT)!;
+    return Matrix4.identity()
+      ..translateByDouble(viewportSize.width / 2, viewportSize.height / 2, 0, 1)
+      ..scaleByDouble(scale, scale, 1, 1)
+      ..translateByDouble(-center.dx, -center.dy, 0, 1);
   }
 
   @override

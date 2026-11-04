@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:texa/core/http_client/http_client.dart';
 
 import '../../../core/constants.dart';
 import '../../../core/data/models.dart';
@@ -17,7 +18,7 @@ import 'model_store.dart';
 class ModelProvisioningService {
   ModelProvisioningService({ModelStore? store, http.Client? client})
     : _store = store ?? createModelStore(),
-      _client = client ?? http.Client();
+      _client = client ?? TexaHttpClient.create();
   final ModelStore _store;
   final http.Client _client;
 

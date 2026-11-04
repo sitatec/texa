@@ -1,14 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:dart_openai/dart_openai.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:texa/core/http_client/http_client.dart';
+import 'package:texa/core/http_client/sse_client.dart';
 
 import '../../../core/constants.dart';
 import '../../../core/errors.dart';
 import '../../../core/data/models.dart';
 import 'ai_actions.dart';
+import '../debug_log.dart';
 import 'system_prompt.dart';
 import 'video_transcription_prompt.dart';
 
@@ -31,15 +33,25 @@ class AiToolCallComplete extends AiEvent {
   final String callId;
 }
 
+/// A completed reasoning item, emitted as soon as it finishes so the
+/// turn's ordered history (and its encrypted replay payload) can be
+/// persisted before the rest of the response arrives.
+class AiReasoningComplete extends AiEvent {
+  AiReasoningComplete(this.item);
+
+  /// Responses reasoning item: id, summary and encrypted_content.
+  final Map<String, dynamic> item;
+}
+
 class AiStreamDone extends AiEvent {
   AiStreamDone(this.raw, this.fullText, {this.responseId});
   final Map<String, dynamic> raw;
   final String fullText;
 
-  /// Id of the final stored response of this turn. Persisted in the AI
-  /// message payload (inside [raw] as `responseId`) so the next turn can
-  /// chain onto it with `previous_response_id` instead of replaying the
-  /// whole history.
+  /// Always null: requests are stateless (`store: false`, no
+  /// `previous_response_id`), so no response id is ever chained onto.
+  /// Response ids are kept only in [raw]'s `responseIds` for
+  /// diagnostics. Kept as a field for payload compatibility.
   final String? responseId;
 }
 
@@ -63,13 +75,33 @@ class AiToolResult {
 
 /// Performs one tool call the model asked for and reports its outcome.
 /// Supplied by the session controller, which owns the board/playback the
-/// tools act on; [AiClient] awaits it after a response completes so the
-/// outcome can be persisted with the turn. The outcome is only sent
-/// back to the model when a call in the round failed (see [AiClient.streamTurn]).
+/// tools act on; [AiClient] starts it as soon as the call is complete
+/// in the stream and collects its outcome for the round's single
+/// follow-up request (see [AiClient.streamTurn]).
 typedef AiToolExecutor = Future<AiToolResult> Function(
   String name,
   Map<String, dynamic> args,
 );
+
+/// One tool call started while its response is still streaming.
+/// Execution needs only the name and arguments, so it begins as soon
+/// as the call is complete; [callId] may still be empty at that point
+/// (some streams only carry it on the terminal response event) and is
+/// patched in once the round ends - it is only needed to build the
+/// follow-up request, never to perform the action.
+class _InFlightToolCall {
+  _InFlightToolCall({
+    required this.call,
+    required this.entry,
+    required this.outcome,
+    required this.callId,
+  });
+
+  final AiToolCallComplete call;
+  final Map<String, dynamic> entry;
+  final Future<AiToolResult> outcome;
+  String callId;
+}
 
 /// Internal terminal event of one streamed response; never leaves
 /// [AiClient.streamTurn].
@@ -78,10 +110,109 @@ class _ResponseRound extends AiEvent {
     required this.responseId,
     required this.text,
     required this.calls,
+    this.reasoning = const [],
   });
   final String? responseId;
   final String text;
   final List<({String callId, String name, Map<String, dynamic> args})> calls;
+  final List<Map<String, dynamic>> reasoning;
+}
+
+/// Canonical JSON for comparing decoded tool arguments. Map key order
+/// is insignificant (a provider may serialise the same call's arguments
+/// in a different order on the terminal event than it streamed them),
+/// so keys are sorted before encoding.
+String _canonicalArgsJson(String raw) {
+  dynamic sort(dynamic v) {
+    // 80 and 80.0 are the same argument; providers mix them between
+    // the streamed and terminal copies of a call.
+    if (v is double && v.isFinite && v == v.truncateToDouble()) {
+      return v.toInt();
+    }
+    if (v is Map) {
+      final keys = v.keys.map((k) => k.toString()).toList()..sort();
+      return {for (final k in keys) k: sort(v[k])};
+    }
+    if (v is List) return [for (final e in v) sort(e)];
+    return v;
+  }
+
+  return jsonEncode(sort(decodeArgs(raw)));
+}
+
+/// Converts ordered persisted AI-turn items to Responses input items,
+/// preserving round order (reasoning -> text -> calls -> outputs).
+/// Reasoning without encrypted content cannot be replayed statelessly
+/// and is skipped; a trailing reasoning item is followed by a minimal
+/// assistant message, as the API requires.
+List<Map<String, dynamic>> aiItemsToInput(List<dynamic> items, String idSeed) {
+  final out = <Map<String, dynamic>>[];
+  var callIndex = 0;
+  final seenCallIds = <String>{};
+  for (final raw in items) {
+    if (raw is! Map) continue;
+    final item = raw.cast<String, dynamic>();
+    switch (item['kind']) {
+      case 'reasoning':
+        final enc = item['encrypted_content'];
+        if (enc is String && enc.isNotEmpty) {
+          out.add({
+            'type': 'reasoning',
+            if (item['id'] is String && (item['id'] as String).isNotEmpty)
+              'id': item['id'],
+            'summary': item['summary'] is List ? item['summary'] : const [],
+            'encrypted_content': enc,
+          });
+        }
+      case 'text':
+        final t = (item['text'] as String? ?? '').trim();
+        if (t.isNotEmpty) {
+          out.add({
+            'role': 'assistant',
+            'content': [
+              {'type': 'output_text', 'text': t},
+            ],
+          });
+        }
+      case 'toolCall':
+        final callId = item['id'] as String? ?? 'call_${idSeed}_$callIndex';
+        callIndex++;
+        // A turn persisted while a duplicate-execution bug was live
+        // can carry the same call twice; replaying both would send
+        // duplicate function_call / function_call_output items, which
+        // the API rejects. Keep the first occurrence only.
+        if (!seenCallIds.add(callId)) {
+          texaDiag(
+            'ai',
+            'replay SUPPRESSED duplicate persisted call callId=$callId name=${item['name']} seed=$idSeed',
+          );
+          continue;
+        }
+        out.add({
+          'type': 'function_call',
+          'call_id': callId,
+          'name': item['name'],
+          'arguments': jsonEncode(item['args'] ?? {}),
+        });
+        final o = item['output'];
+        out.add({
+          'type': 'function_call_output',
+          'call_id': callId,
+          'output': o is String && o.isNotEmpty
+              ? o
+              : const AiToolResult.success().wireOutput,
+        });
+    }
+  }
+  if (out.isNotEmpty && out.last['type'] == 'reasoning') {
+    out.add({
+      'role': 'assistant',
+      'content': [
+        {'type': 'output_text', 'text': ''},
+      ],
+    });
+  }
+  return out;
 }
 
 /// The media family of an [AiUpload], decided from its MIME type (falling
@@ -173,24 +304,39 @@ class AiUpload {
   );
 }
 
-/// Direct streaming client to the fixed Meta AI endpoint, backed by the
-/// fully-typed `dart_openai` client ([OpenAIClient]).
+/// Direct streaming client to the fixed Meta AI (OpenAI Responses
+/// API compatible) endpoint, talking to it over the shared
+/// [SseClient]/[TexaHttpClient] transport instead of a third-party
+/// OpenAI SDK.
+///
+/// One client serves a whole session: it owns one HTTP transport and
+/// reuses it for every tutor turn, every tool-round follow-up and
+/// every background transcription, keeping connections alive instead
+/// of rebuilding them per turn. Interruption is therefore *not* done
+/// by closing the client (that used to be the only abort handle, and
+/// is why a client had to be created per turn): [cancelTurn] aborts
+/// only the in-flight tutor turn, through that request's own
+/// cancellation signal, and leaves the transport - and any background
+/// transcription - untouched. [close] is reserved for the end of the
+/// client's life (session disposed, settings test finished) and does
+/// close the transport.
 class AiClient {
   AiClient(this.apiKey, {http.Client? client})
-    : _client = client ?? http.Client(),
-      _openAi = OpenAIClient(
-        apiKey: apiKey,
-        baseUrl: _baseUrl.baseUrl,
-        version: _baseUrl.version,
-        requestsTimeOut: const Duration(seconds: connectTimeoutSeconds),
-        // Preserve the previous single-attempt behaviour: a failed turn is
-        // surfaced (and retried by the student) instead of silently resent.
-        retryPolicy: OpenAIRetryPolicy.none,
-      );
+    : _client = client ?? TexaHttpClient.create() {
+    _sse = SseClient(client: _client);
+  }
 
   final String apiKey;
   final http.Client _client;
-  final OpenAIClient _openAi;
+  late final SseClient _sse;
+
+  Map<String, String> get _headers => {
+    'Authorization': 'Bearer $apiKey',
+    'Content-Type': 'application/json',
+  };
+
+  static const String _responsesUrl = '$apiBaseUrl/responses';
+  static const String _modelsUrl = '$apiBaseUrl/models';
 
   /// Whether [message] is a saved student turn that was sent (or is to
   /// be sent) as a turn-video. Such messages keep their video bytes in
@@ -262,6 +408,7 @@ class AiClient {
   }) async {
     _ResponseRound? completed;
     await for (final event in _streamOneResponse(
+      cancellation: _disposeCancellation,
       model: model,
       instructions: kVideoTranscriptionPrompt,
       input: [
@@ -275,7 +422,6 @@ class AiClient {
           ],
         },
       ],
-      previousResponseId: null,
       reasoningEffort: null,
       allowTools: false,
       storeResponse: false,
@@ -298,46 +444,48 @@ class AiClient {
   /// flight are stale and must not be sent to the model.
   bool _closed = false;
 
-  /// Completed by [close] so a stream blocked waiting for the model's
-  /// first token (e.g. while it is still thinking) ends immediately,
-  /// instead of whenever the transport gets around to noticing the
-  /// close - on web a closed client may not abort an in-flight fetch
-  /// at all, which used to make thinking turns un-interruptible.
-  final Completer<void> _closeSignal = Completer<void>();
+  /// Fired by [close]; aborts every request this client has in flight.
+  final _RequestCancellation _disposeCancellation = _RequestCancellation();
 
-  /// `dart_openai` joins `baseUrl/version/endpoint`, while [apiBaseUrl]
-  /// already contains the version segment (`https://api.meta.ai/v1`).
-  static ({String baseUrl, String version}) get _baseUrl {
-    final uri = Uri.parse(apiBaseUrl);
-    final segments = uri.pathSegments.where((s) => s.isNotEmpty).toList();
-    if (segments.isEmpty) return (baseUrl: apiBaseUrl, version: 'v1');
-    final origin = Uri(
-      scheme: uri.scheme,
-      host: uri.host,
-      port: uri.hasPort ? uri.port : null,
-    ).toString();
-    return (baseUrl: origin, version: segments.last);
-  }
+  /// Cancellation for the tutor turn currently streaming, if any.
+  /// Kept separate from [_disposeCancellation] so [cancelTurn] kills
+  /// the turn the student interrupted without touching a background
+  /// transcription running on the same client (those used to be safe
+  /// only because each ran on its own client).
+  _RequestCancellation? _turnCancellation;
 
-  /// Closes the underlying transport, aborting any request in flight.
-  ///
-  /// This is the session controller's abort handle for the current turn.
-  /// A turn interrupted this way ends silently (no error is surfaced for
-  /// a cancellation the app itself requested); see the `_closed` guards
-  /// in [streamTurn] and [_streamOneResponse].
+  bool _isCancelled(_RequestCancellation cancellation) =>
+      _closed || cancellation.isCancelled;
+
+  /// Aborts the in-flight tutor turn, if any: its stream ends promptly
+  /// and silently (a cancellation the app itself requested is not an
+  /// error), and the in-flight HTTP request is aborted at the
+  /// transport via its abort trigger. The client - its transport,
+  /// connection pool and any background transcription - stays usable,
+  /// so the next turn reuses them.
+  void cancelTurn() => _turnCancellation?.cancel();
+
+  /// Closes the underlying transport, aborting every request in
+  /// flight. Terminal: once closed, this client starts no new
+  /// requests. Use [cancelTurn] to interrupt a single turn.
   void close() {
+    if (_closed) return;
     _closed = true;
-    if (!_closeSignal.isCompleted) _closeSignal.complete();
+    _turnCancellation?.cancel();
+    _disposeCancellation.cancel();
     _client.close();
   }
 
-  /// Races [source] against [close]: when the client is closed the
-  /// returned stream ends promptly (cancelling the source) even if the
-  /// source is blocked waiting for its first event - e.g. while the
-  /// model is still thinking, where closing the transport alone may
-  /// not unblock the await (notably on web). Ending without an error
-  /// is deliberate: callers treat a closed client as a silent abort.
-  Stream<T> _untilClosed<T>(Stream<T> source) {
+  /// Races [source] against [cancellation]: when it fires the returned
+  /// stream ends promptly (cancelling the source) even if the source
+  /// is blocked waiting for its first event - e.g. while the model is
+  /// still thinking, where aborting the transport alone may not
+  /// unblock the await (notably on web). Ending without an error is
+  /// deliberate: callers treat a cancelled request as a silent abort.
+  Stream<T> _untilCancelled<T>(
+    Stream<T> source,
+    _RequestCancellation cancellation,
+  ) {
     late StreamController<T> controller;
     StreamSubscription<T>? subscription;
     var finished = false;
@@ -358,7 +506,7 @@ class AiClient {
             if (!controller.isClosed) controller.close();
           },
         );
-        _closeSignal.future.then((_) {
+        cancellation.signal.then((_) {
           if (finished) return;
           finished = true;
           final sub = subscription;
@@ -372,74 +520,44 @@ class AiClient {
         final sub = subscription;
         subscription = null;
         // Fire-and-forget, deliberately NOT awaited: cancelling a
-        // source suspended in `await client.send()` (still awaiting
-        // response headers / first token) only completes when that
-        // await does, and returning that future from onCancel holds
-        // this controller's done event hostage until then - which is
-        // exactly the abort we are trying to perform. (Found by
-        // reproduction: with the await, close() during the
-        // awaiting-headers phase never ended the stream.)
+        // source suspended awaiting response headers only completes
+        // when that await does, and returning that future from
+        // onCancel holds this controller's done event hostage until
+        // then - which is exactly the abort we are trying to perform.
         if (sub != null) unawaited(sub.cancel().catchError((_) {}));
       },
     );
     return controller.stream;
   }
 
-  /// The id of the most recent stored response in [history], or null when
-  /// no AI message carries one (a brand-new or pre-`store` session). The
-  /// id only ever lives in the saved AI messages' payloads; it is read
-  /// back from there so it survives restarts with the rest of the history.
-  static String? latestResponseId(List<ChatMessage> history) {
-    for (final m in history.reversed) {
-      if (m.role != 'ai') continue;
-      final id = m.payload['responseId'];
-      if (id is String && id.isNotEmpty) return id;
-    }
-    return null;
-  }
-
-  /// Whether the AI message owning the latest stored response id left
-  /// tool calls whose outputs were never sent back to the model (the
-  /// normal end of a turn now: successful results are persisted, not
-  /// returned). Chaining onto such a response would continue a stored
-  /// conversation whose function calls have no outputs, so the next
-  /// turn must replay the local history instead - which answers every
-  /// call with its persisted `function_call_output`.
-  static bool latestResponseHasPendingToolOutputs(List<ChatMessage> history) {
-    for (final m in history.reversed) {
-      if (m.role != 'ai') continue;
-      final id = m.payload['responseId'];
-      if (id is String && id.isNotEmpty) {
-        return m.payload['toolOutputsPending'] == true;
-      }
-    }
-    return false;
-  }
-
   /// Minimal authenticated request used by Test connection.
   Future<void> testConnection() async {
     try {
-      await _openAi.model
-          .list(
-            client: _NonClosingClient(
-              _client,
-              abortTrigger: _closeSignal.future,
-            ),
-          )
+      final request = http.AbortableRequest(
+        'GET',
+        Uri.parse(_modelsUrl),
+        abortTrigger: _disposeCancellation.signal,
+      )..headers.addAll(_headers);
+      final response = await _client
+          .send(request)
           .timeout(const Duration(seconds: connectTimeoutSeconds));
-    } on RequestFailedException catch (e) {
-      if (e.statusCode == 401 || e.statusCode == 403) {
+      // Drain (bounded) so the connection can be reused / released.
+      final body = await response.stream.bytesToString();
+      if (response.statusCode == 401 || response.statusCode == 403) {
         throw const AppError(
           'That API key was not accepted. Check it and try again.',
         );
       }
-      throw AppError(
-        'Connection failed (${e.statusCode}). Check your connection and try again.',
-        cause: e,
-      );
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw AppError(
+          'Connection failed (${response.statusCode}). Check your connection and try again.',
+          cause: SseHttpException(response.statusCode, body),
+        );
+      }
     } on AppError {
       rethrow;
     } catch (e) {
+      if (_closed) return;
       throw AppError(
         'Could not reach Meta AI. Check your connection and try again.',
         cause: e,
@@ -584,55 +702,47 @@ class AiClient {
                     : 0,
               )
               .toSet();
-    // With a stored previous response the server already holds the whole
-    // conversation, so only this turn's new input is sent. The full
-    // replay below is the bootstrap for sessions that have no stored
-    // response id yet (new or legacy sessions) and - once the video
-    // window is active - the only way to replace older videos with
-    // transcripts, since a chained request keeps every video the
-    // server has ever stored for the chain (see [streamTurn]).
+    // Stateless: the full local history is replayed on every request
+    // (older student videos as transcripts, newest as video).
     if (includeHistory) {
       for (var index = 0; index < history.length; index++) {
         final m = history[index];
         if (index == currentIndex) continue;
         if (m.role == 'ai') {
           final p = m.payload;
-          final text = (p['text'] as String? ?? '').trim();
-          if (text.isNotEmpty) {
-            input.add({
-              'role': 'assistant',
-              'content': [
-                {'type': 'output_text', 'text': text},
-              ],
-            });
-          }
-          final calls = p['toolCalls'];
-          if (calls is List) {
-            for (var i = 0; i < calls.length; i++) {
-              final cm = calls[i] as Map<String, dynamic>;
-              // Every replayed function_call must be answered by a
-              // matching function_call_output, or the API rejects the
-              // whole request ("No tool output found for function call
-              // ..."). Legacy messages saved no result, so a stored
-              // outcome is replayed when present and a plain success is
-              // synthesised otherwise - the action did happen on the
-              // board back then. Call ids also have to be unique, hence
-              // the index on the synthesised fallback.
-              final callId = cm['id'] as String? ?? 'call_${cm['name']}_$i';
+          final items = p['items'];
+          if (items is List && items.isNotEmpty) {
+            input.addAll(aiItemsToInput(items, m.id));
+          } else {
+            final text = (p['text'] as String? ?? '').trim();
+            if (text.isNotEmpty) {
               input.add({
-                'type': 'function_call',
-                'call_id': callId,
-                'name': cm['name'],
-                'arguments': jsonEncode(cm['args'] ?? {}),
+                'role': 'assistant',
+                'content': [
+                  {'type': 'output_text', 'text': text},
+                ],
               });
-              final storedOutput = cm['output'];
-              input.add({
-                'type': 'function_call_output',
-                'call_id': callId,
-                'output': storedOutput is String && storedOutput.isNotEmpty
-                    ? storedOutput
-                    : const AiToolResult.success().wireOutput,
-              });
+            }
+            final calls = p['toolCalls'];
+            if (calls is List) {
+              for (var i = 0; i < calls.length; i++) {
+                final cm = calls[i] as Map<String, dynamic>;
+                final callId = cm['id'] as String? ?? 'call_${m.id}_$i';
+                input.add({
+                  'type': 'function_call',
+                  'call_id': callId,
+                  'name': cm['name'],
+                  'arguments': jsonEncode(cm['args'] ?? {}),
+                });
+                final storedOutput = cm['output'];
+                input.add({
+                  'type': 'function_call_output',
+                  'call_id': callId,
+                  'output': storedOutput is String && storedOutput.isNotEmpty
+                      ? storedOutput
+                      : const AiToolResult.success().wireOutput,
+                });
+              }
             }
           }
         } else if (isStudentVideoTurn(m)) {
@@ -733,40 +843,36 @@ class AiClient {
 
   /// Streams one turn.
   ///
-  /// Tutor requests are sent with `store: true` while the stored
-  /// chain is in use, so the next turn can chain onto them. Once the
-  /// session is past the video window ([maxVideoTurnsPerRequest]) the
-  /// chain is abandoned for good - every later turn replays the local
-  /// history instead - so those requests are sent with `store: false`:
-  /// nothing will ever chain onto them, and their (non-stored)
-  /// response ids are not persisted. A failure follow-up inside such
-  /// a turn therefore cannot chain either; it resends the turn's
-  /// input together with the `function_call`/`function_call_output`
-  /// items, self-contained. When a previous
-  /// stored response is known (passed explicitly or found in the saved
-  /// AI messages in [history]) only this turn's new input plus
-  /// `previous_response_id` is sent - the history itself is never
-  /// replayed. That chaining is only used while the whole session fits
-  /// in the video window ([maxVideoTurnsPerRequest] student videos):
-  /// a chained request keeps every video ever stored on the chain, so
-  /// past the window every turn instead replays the local history -
-  /// transcripts for older student turns, videos for the newest ones -
-  /// with no `previous_response_id`, and the fresh response becomes
-  /// the (unchained-from) record of that turn.
+  /// Every request is stateless from the start: `store: false`, no
+  /// `previous_response_id`, and `include:
+  /// ["reasoning.encrypted_content"]` on every request. The full local
+  /// history - including each turn's ordered reasoning (encrypted),
+  /// text, function calls, outputs and attachments - is replayed on
+  /// every request, and tool-result follow-ups resend the turn input
+  /// plus all rounds' ordered items and outputs so far, self-contained.
+  /// Within the video window the newest student turns replay as video;
+  /// older ones replay as transcripts (see [maxVideoTurnsPerRequest]).
   ///
-  /// There is no agentic loop: a response's tool calls are performed
-  /// once through [executeToolCall], their outcomes are persisted on
-  /// the calls in [AiStreamDone.raw] (and replayed with the history of
-  /// later turns as `function_call_output` items), and the turn ends.
-  /// The single exception is failure: if any call in a round failed,
-  /// that round's outputs are sent back in one follow-up request so
-  /// the model can react to the failure (retry differently, work
-  /// around it, or explain it) instead of assuming success. That
-  /// failure follow-up can itself ask for tools, which are performed
-  /// the same way, bounded by [maxToolRounds]. Without an executor the
+  /// The agentic loop: a response's tool calls are performed through
+  /// [executeToolCall] and every outcome - success or failure - is
+  /// sent back to the model, which may then call more tools or answer
+  /// in words, until a response arrives with no further calls.
+  /// Streaming stays realtime: text deltas are forwarded as they
+  /// arrive, and each tool call starts executing as soon as it is
+  /// complete in the stream (after the consumer has had its chance to
+  /// queue any preceding text), not when the whole response ends.
+  /// Execution therefore overlaps the rest of the response, but the
+  /// results are still collected and sent in ONE follow-up request
+  /// per round - a response asking for three actions gets a single
+  /// request carrying all three `function_call_output` items, in call
+  /// order, so the stored/replayed history stays well-formed. Rounds
+  /// are bounded by [maxToolRounds], after which one last tool-less
+  /// request lets the model wrap up in words. Without an executor the
   /// turn stays a single request, as before. [AiStreamDone] is
   /// emitted once, at the very end, and carries the final response id
   /// for the caller to persist with the AI message.
+  /// Streams one tutor turn. Concurrent turns are not supported:
+  /// [cancelTurn] aborts whichever turn is currently streaming.
   Stream<AiEvent> streamTurn({
     required String model,
     required List<ChatMessage> history,
@@ -778,33 +884,57 @@ class AiClient {
     List<AiUpload> uploads = const [],
     String? extraContext,
     String? reasoningEffort,
-    String? previousResponseId,
     AiToolExecutor? executeToolCall,
     int maxToolRounds = 10,
     List<String> priorVideosBase64 = const [],
   }) async* {
-    final currentInHistory = history.any(
-      (m) => isStudentVideoTurn(m) && m.payload['videoBase64'] == videoBase64,
-    );
-    final videoTurnCount =
-        studentVideoTurns(history).length + (currentInHistory ? 0 : 1);
-    // Past this many student videos a chained request would keep
-    // every video ever stored on the chain, so replay takes over -
-    // permanently, since the count only grows within a session.
-    final pastVideoWindow = videoTurnCount > maxVideoTurnsPerRequest;
-    final chainedId = previousResponseId ?? latestResponseId(history);
-    // An explicitly passed id is the caller's responsibility; an id
-    // recovered from history is only chained onto when its tool
-    // outputs (if any) were actually sent back in their turn.
-    final chainHasPendingToolOutputs =
-        previousResponseId == null &&
-        latestResponseHasPendingToolOutputs(history);
-    final useChain =
-        chainedId != null && !chainHasPendingToolOutputs && !pastVideoWindow;
-    var previousId = useChain ? chainedId : null;
-    // Stored only while a later turn may chain onto this one. Past
-    // the video window no turn ever chains again, so do not store.
-    final storeResponse = !pastVideoWindow;
+    if (_closed) return;
+    // A new turn supersedes the cancellation of the one it replaces:
+    // each turn gets a fresh signal, so cancelling turn N can never
+    // leak into turn N+1, which is what makes one long-lived client
+    // safe where a fresh client per turn used to provide isolation.
+    final cancellation = _RequestCancellation();
+    _turnCancellation = cancellation;
+    try {
+      yield* _streamTurn(
+        cancellation: cancellation,
+        model: model,
+        history: history,
+        videoBase64: videoBase64,
+        interruptionContext: interruptionContext,
+        studentMemory: studentMemory,
+        recentObservations: recentObservations,
+        currentObservation: currentObservation,
+        uploads: uploads,
+        extraContext: extraContext,
+        reasoningEffort: reasoningEffort,
+        executeToolCall: executeToolCall,
+        maxToolRounds: maxToolRounds,
+        priorVideosBase64: priorVideosBase64,
+      );
+    } finally {
+      if (identical(_turnCancellation, cancellation)) {
+        _turnCancellation = null;
+      }
+    }
+  }
+
+  Stream<AiEvent> _streamTurn({
+    required _RequestCancellation cancellation,
+    required String model,
+    required List<ChatMessage> history,
+    required String videoBase64,
+    Map<String, dynamic>? interruptionContext,
+    String studentMemory = '',
+    List<SessionObservation> recentObservations = const [],
+    String currentObservation = '',
+    List<AiUpload> uploads = const [],
+    String? extraContext,
+    String? reasoningEffort,
+    AiToolExecutor? executeToolCall,
+    int maxToolRounds = 10,
+    List<String> priorVideosBase64 = const [],
+  }) async* {
     final request = _requestInput(
       history: history,
       videoBase64: videoBase64,
@@ -814,7 +944,7 @@ class AiClient {
       currentObservation: currentObservation,
       uploads: uploads,
       extraContext: extraContext,
-      includeHistory: !useChain,
+      includeHistory: true,
       priorVideosBase64: priorVideosBase64,
     );
 
@@ -822,178 +952,468 @@ class AiClient {
     final allCalls = <Map<String, dynamic>>[];
     final responseIds = <String>[];
     List<Map<String, dynamic>> nextInput = request.input;
-    // In non-stored (past-window) mode a failure follow-up cannot
-    // chain on the failed round's response, so it resends this input
-    // plus each round's function_call/function_call_output items.
-    var failureReplayInput = request.input;
+    // Stateless follow-ups cannot chain on the previous round's
+    // response, so each resends this input plus every round's ordered
+    // items and function_call_output items so far.
+    var replayFollowUpInput = request.input;
+    // Ordered pieces of the whole turn (reasoning/text/toolCall maps),
+    // persisted as `items` so replay reproduces the original round
+    // order instead of flattening text before every call. Tool-call
+    // entries are shared with allCalls, so status/output/id patches
+    // land in both.
+    final allItems = <Map<String, dynamic>>[];
     var wrapUpNext = false;
     // True when the final round's tool calls were performed but their
-    // (successful) outputs were not sent back; persisted on the AI
-    // message so the next turn replays history instead of chaining
-    // onto a stored response with unanswered function calls.
+    // outputs were never sent back (only possible without an
+    // executor); persisted on the AI message for diagnostics - replay
+    // always answers calls with their persisted outputs anyway. A
+    // completed agentic loop always answers its calls, so it leaves
+    // this false.
     var toolOutputsPending = false;
 
+    // Performs one call, converting a throw into a failure outcome so
+    // the future can safely run un-awaited while the rest of the
+    // response is still streaming.
+    Future<AiToolResult> runToolCall(AiToolCallComplete call) async {
+      try {
+        return await executeToolCall!(call.name, call.args);
+      } catch (e) {
+        debugPrint('Failed to execute tool call $call: $e');
+        final detail = e.toString();
+        return AiToolResult.failure(
+          'The action failed: '
+          '${detail.length > 200 ? detail.substring(0, 200) : detail}',
+        );
+      }
+    }
+
+    if (kDebugMode) {
+      texaDiag(
+        'ai',
+        'turn start history=${history.length} uploads=${uploads.length} input=${diagInputSummary(request.input)}',
+      );
+    }
+    for (final m in history.where((m) => m.role == 'ai')) {
+      final items = m.payload['items'];
+      if (kDebugMode) {
+        texaDiag(
+          'ai',
+          'history ai id=${m.id} kind=${m.kind} items=${items is List ? items.map((i) => i is Map ? (i['kind'] == 'toolCall'
+                          ? 'call(${i['name']}:${i['id'] ?? 'MISSING'}:${i['status'] ?? 'nostatus'}:${diagJson(i['args'])})'
+                          : i['kind'] == 'text'
+                          ? 'text(${diagText(i['text']?.toString() ?? '')})'
+                          : 'reasoning(${i['id'] ?? 'noid'}:${((i['encrypted_content'] ?? '') as String).isEmpty ? 'NOENC' : 'enc'})') : '?').join(',') : 'legacy'} text=${diagText(m.payload['text']?.toString() ?? '')} calls=${diagJson(m.payload['toolCalls'])}',
+        );
+      }
+    }
     for (var round = 0; ; round++) {
-      // Closed while the previous round (or its tool calls) was in
+      // Cancelled while the previous round (or its tool calls) was in
       // flight: the turn was interrupted, so do not send anything else.
-      if (_closed) return;
+      if (_isCancelled(cancellation)) return;
       final allowTools = !wrapUpNext;
+      if (kDebugMode) {
+        texaDiag(
+          'ai',
+          'round $round request allowTools=$allowTools wrapUp=$wrapUpNext input=${diagInputSummary(nextInput)}',
+        );
+      }
       _ResponseRound? completed;
+      // Tool calls of this round, started the moment each one is
+      // complete in the stream; their outcome futures are collected
+      // here and awaited only once the round has ended.
+      final inFlight = <_InFlightToolCall>[];
+      final roundItems = <Map<String, dynamic>>[];
+      final roundStreamedText = StringBuffer();
+      void flushRoundText() {
+        final segment = roundStreamedText.toString();
+        if (segment.trim().isNotEmpty) {
+          final item = {'kind': 'text', 'text': segment};
+          roundItems.add(item);
+          allItems.add(item);
+        }
+        roundStreamedText.clear();
+      }
+
       await for (final event in _streamOneResponse(
+        cancellation: cancellation,
         model: model,
         instructions: request.instructions,
         input: nextInput,
-        previousResponseId: pastVideoWindow ? null : previousId,
         reasoningEffort: reasoningEffort,
         allowTools: allowTools,
-        storeResponse: storeResponse,
+        storeResponse: false,
       )) {
         if (event is _ResponseRound) {
           completed = event;
         } else {
+          if (event is AiTextDelta) roundStreamedText.write(event.text);
+          if (event is AiReasoningComplete) {
+            flushRoundText();
+            final item = <String, dynamic>{
+              'kind': 'reasoning',
+              if (event.item['id'] != null) 'id': event.item['id'],
+              'summary': event.item['summary'] is List
+                  ? event.item['summary']
+                  : const [],
+              if (event.item['encrypted_content'] != null)
+                'encrypted_content': event.item['encrypted_content'],
+            };
+            // Insert at the round's reasoning position (its start),
+            // in case the item only arrived on the terminal event,
+            // after text/tool pieces had already been recorded.
+            final roundStart = allItems.length - roundItems.length;
+            final reasoningCount = roundItems
+                .where((i) => i['kind'] == 'reasoning')
+                .length;
+            // Upgrade of an already-recorded item (same id) replaces
+            // it instead of duplicating it.
+            final existingAt = roundItems.indexWhere(
+              (i) =>
+                  i['kind'] == 'reasoning' &&
+                  item['id'] != null &&
+                  i['id'] == item['id'],
+            );
+            if (existingAt >= 0) {
+              roundItems[existingAt] = item;
+              allItems[roundStart + existingAt] = item;
+            } else {
+              roundItems.insert(reasoningCount, item);
+              allItems.insert(roundStart + reasoningCount, item);
+            }
+          }
+          if (event is AiToolCallComplete) flushRoundText();
+          // Execution-layer idempotency guard: if this call is
+          // already in flight for this round - same call_id, or (id
+          // not yet known on either copy) same name + same normalised
+          // arguments - it is the same physical call reported twice,
+          // and it must neither be yielded (the caller would persist
+          // it twice) nor executed again. Two legitimate calls with
+          // distinct call_ids are never merged by this check.
+          if (event is AiToolCallComplete && executeToolCall != null) {
+            final duplicate = inFlight.any(
+              (f) =>
+                  (event.callId.isNotEmpty && f.callId == event.callId) ||
+                  ((f.callId.isEmpty || event.callId.isEmpty) &&
+                      f.call.name == event.name &&
+                      _canonicalArgsJson(jsonEncode(f.call.args)) ==
+                          _canonicalArgsJson(jsonEncode(event.args))),
+            );
+            if (duplicate) {
+              texaDiag(
+                'ai',
+                'round $round call event SUPPRESSED (already in flight) name=${event.name} callId=${event.callId.isEmpty ? 'MISSING' : event.callId} args=${diagJson(event.args)}',
+              );
+              continue;
+            }
+          }
+          // Text deltas and completed tool calls reach the consumer
+          // immediately; nothing waits for the response to finish.
           yield event;
+          // Resuming after a yield means the consumer has handled
+          // the event (queueing any text that preceded the call), so
+          // it is safe - and correctly ordered - to start the call
+          // now, while the model may still be streaming the rest of
+          // this response.
+          if (event is AiToolCallComplete && executeToolCall != null) {
+            final entry = <String, dynamic>{
+              'kind': 'toolCall',
+              if (event.callId.isNotEmpty) 'id': event.callId,
+              'name': event.name,
+              'args': event.args,
+            };
+            allCalls.add(entry);
+            // Same map in all three lists: id/status/output patches
+            // below land in the persisted toolCalls and items alike.
+            roundItems.add(entry);
+            allItems.add(entry);
+            // Execute now, call_id or not: performing the action
+            // needs only its name and arguments. The id is resolved
+            // when the round ends, before the follow-up is built.
+            if (kDebugMode) {
+              texaDiag(
+                'ai',
+                'round $round tool START (streaming) name=${event.name} callId=${event.callId.isEmpty ? 'MISSING' : event.callId} args=${diagJson(event.args)} inFlight=${inFlight.length + 1}',
+              );
+            }
+            inFlight.add(
+              _InFlightToolCall(
+                call: event,
+                entry: entry,
+                outcome: runToolCall(event),
+                callId: event.callId,
+              ),
+            );
+          }
         }
       }
       // Null (or closed) means the round was aborted by [close]; end
       // the turn without emitting a done event or a bogus error.
       final result = completed;
-      if (result == null || _closed) return;
+      if (kDebugMode) {
+        texaDiag(
+          'ai',
+          'round $round stream-end completed=${result != null} closed=${_isCancelled(cancellation)} inFlight=${inFlight.map((f) => '${f.call.name}:${f.callId.isEmpty ? 'MISSING' : f.callId}').join(',')} streamedText=${diagText(roundStreamedText.toString())}',
+        );
+      }
+      if (result == null || _isCancelled(cancellation)) return;
+      if (kDebugMode) {
+        texaDiag(
+          'ai',
+          'round $round completed responseId=${result.responseId} text=${diagText(result.text)} calls=${result.calls.map((c) => '${c.name}:${c.callId.isEmpty ? 'MISSING' : c.callId}:${diagJson(c.args)}').join(' | ')} reasoning=${result.reasoning.map((r) => '${r['id']}:${((r['encrypted_content'] ?? '') as String).isEmpty ? 'NOENC' : diagText(r['encrypted_content'] as String)}').join(',')}',
+        );
+      }
       if (result.responseId != null && result.responseId!.isNotEmpty) {
+        // Diagnostics only: stateless requests are never chained onto.
         responseIds.add(result.responseId!);
-        // A non-stored response cannot be chained onto; its id is
-        // kept only in [responseIds] for diagnostics, never as the
-        // next request's (or the persisted message's) response id.
-        if (!pastVideoWindow) previousId = result.responseId;
       }
       fullText.write(result.text);
-      if (result.calls.isEmpty || wrapUpNext) {
-        // This round sent no new calls (a wrap-up round's input was
-        // the previous round's outputs, so nothing is left pending).
-        toolOutputsPending = false;
-        break;
-      }
-
-      final roundCalls = <Map<String, dynamic>>[];
-      for (final call in result.calls) {
-        final entry = <String, dynamic>{
-          if (call.callId.isNotEmpty) 'id': call.callId,
-          'name': call.name,
-          'args': call.args,
-        };
-        roundCalls.add(entry);
-        allCalls.add(entry);
-      }
+      flushRoundText();
+      if (result.calls.isEmpty || wrapUpNext) break;
       // No executor: keep the old single-request behaviour. The calls
-      // were still streamed above so the caller can perform them; only
-      // performing them (and any failure follow-up) is skipped.
-      if (executeToolCall == null) break;
-
-      // Perform every call in the order the model issued it. Outcomes
-      // are recorded on the persisted calls (status/output, replayed
-      // with later turns' history), but successful outcomes are NOT
-      // sent back to the model: the turn ends here instead of looping
-      // for the model's next step.
-      final outputs = <Map<String, dynamic>>[];
-      var anyFailure = false;
-      for (final call in result.calls) {
-        AiToolResult outcome;
-        try {
-          outcome = await executeToolCall(call.name, call.args);
-        } catch (e) {
-          debugPrint('Failed to execute tool call $call: $e');
-          final detail = e.toString();
-          outcome = AiToolResult.failure(
-            'The action failed: '
-            '${detail.length > 200 ? detail.substring(0, 200) : detail}',
-          );
+      // were still streamed above so the caller can perform them;
+      // their unanswered outputs keep the next turn off the chain.
+      if (executeToolCall == null) {
+        flushRoundText();
+        // Reasoning captured in the round but never streamed (e.g.
+        // only on the terminal event) still belongs in the order.
+        for (final call in result.calls) {
+          final entry = <String, dynamic>{
+            'kind': 'toolCall',
+            if (call.callId.isNotEmpty) 'id': call.callId,
+            'name': call.name,
+            'args': call.args,
+          };
+          allCalls.add(entry);
+          allItems.add(entry);
         }
-        if (!outcome.success) anyFailure = true;
-        final entry = roundCalls.firstWhere(
-          (c) => call.callId.isNotEmpty
-              ? c['id'] == call.callId
-              : c['name'] == call.name && !c.containsKey('output'),
-        );
-        entry['status'] = outcome.success ? 'success' : 'error';
-        entry['output'] = outcome.wireOutput;
-        outputs.add({
-          'type': 'function_call_output',
-          'call_id': call.callId,
-          'output': outcome.wireOutput,
-        });
-      }
-      if (!anyFailure) {
         toolOutputsPending = true;
         break;
       }
 
-      // A failure is the one outcome the model must hear about in this
-      // turn, so it can react instead of assuming the action happened.
-      // Every call of the round must be answered under the exact
-      // call_id the API issued for it; a missing id can never be
-      // repaired locally - a synthesised one (call_<name>) is rejected
-      // with a 400 ("function_call_output call_id ... does not match
-      // any function_call in the request or its previous_response_id
-      // chain") - so fail the turn rather than send a doomed follow-up.
-      // (Successful rounds never send outputs, so a missing id costs
-      // nothing unless a call actually failed.)
-      for (final call in result.calls) {
-        if (call.callId.isEmpty) {
+      // Defensive: any call the round reports that was not already
+      // started as it streamed (the stream normally emits every one)
+      // is started now, before its result is needed.
+      //
+      // Matching is POSITIONAL, and deliberately nothing else:
+      // result.calls is _streamOneResponse's completedCalls, built in
+      // exactly the order its AiToolCallComplete events were yielded
+      // - and therefore exactly the order calls were started into
+      // inFlight. So result.calls[i] is already running iff
+      // i < inFlight.length. The previous identity matching (call_id,
+      // else name+arguments) broke in release builds: streamed copies
+      // often carry no call_id yet, and their argument JSON differs
+      // cosmetically from the terminal copy (80 vs 80.0, key order),
+      // so EVERY call failed to match and was executed a second time.
+      final identityMatched = <int>{};
+      for (var callIndex = 0; callIndex < result.calls.length; callIndex++) {
+        final call = result.calls[callIndex];
+        if (callIndex < inFlight.length) {
+          continue;
+        }
+        // Belt-and-braces for a terminal list that contains a copy
+        // the stream layer already suppressed at yield time (so it
+        // never entered inFlight): never start a call whose call_id,
+        // or normalised name+arguments, is already in flight.
+        var alreadyRunning = false;
+        for (var i = 0; i < inFlight.length; i++) {
+          if (identityMatched.contains(i)) continue;
+          final f = inFlight[i];
+          if ((call.callId.isNotEmpty && f.callId == call.callId) ||
+              ((f.callId.isEmpty || call.callId.isEmpty) &&
+                  f.call.name == call.name &&
+                  _canonicalArgsJson(jsonEncode(f.call.args)) ==
+                      _canonicalArgsJson(jsonEncode(call.args)))) {
+            identityMatched.add(i);
+            alreadyRunning = true;
+            break;
+          }
+        }
+        if (alreadyRunning) continue;
+        texaDiag(
+          'ai',
+          'round $round terminal call NOT streamed - starting now name=${call.name} callId=${call.callId} args=${diagJson(call.args)}',
+        );
+        final complete = AiToolCallComplete(
+          call.name,
+          call.args,
+          callId: call.callId,
+        );
+        final entry = <String, dynamic>{
+          'kind': 'toolCall',
+          if (call.callId.isNotEmpty) 'id': call.callId,
+          'name': call.name,
+          'args': call.args,
+        };
+        allCalls.add(entry);
+        roundItems.add(entry);
+        allItems.add(entry);
+        inFlight.add(
+          _InFlightToolCall(
+            call: complete,
+            entry: entry,
+            outcome: runToolCall(complete),
+            callId: call.callId,
+          ),
+        );
+      }
+
+      // Patch in call_ids that only arrived with the completed
+      // response. In-flight calls are in completion order, matching
+      // result.calls; fall back to the first unresolved same-name
+      // call when positions have shifted.
+      final resolvedIndices = <int>{};
+      for (var i = 0; i < inFlight.length; i++) {
+        final pending = inFlight[i];
+        if (pending.callId.isNotEmpty) continue;
+        int? match;
+        if (i < result.calls.length &&
+            !resolvedIndices.contains(i) &&
+            result.calls[i].name == pending.call.name &&
+            result.calls[i].callId.isNotEmpty) {
+          match = i;
+        } else {
+          for (var j = 0; j < result.calls.length; j++) {
+            if (!resolvedIndices.contains(j) &&
+                result.calls[j].name == pending.call.name &&
+                result.calls[j].callId.isNotEmpty) {
+              match = j;
+              break;
+            }
+          }
+        }
+        if (match != null) {
+          resolvedIndices.add(match);
+          pending.callId = result.calls[match].callId;
+          pending.entry['id'] = pending.callId;
+        }
+      }
+
+      // Every call must be answered under the exact call_id the API
+      // issued for it. A missing id can never be repaired locally -
+      // a synthesised one (call_<name>) is rejected with a 400
+      // ("function_call_output call_id ... does not match any
+      // function_call in the request or its previous_response_id
+      // chain") - so fail the turn rather than send a doomed
+      // follow-up.
+      for (final pending in inFlight) {
+        if (pending.callId.isEmpty) {
           throw AppError(
-            'Meta AI asked for an action (${call.name}) without a call '
-            'id, so its failure could not be sent back. Your work is '
-            'safe on the board.',
+            'Meta AI asked for an action (${pending.call.name}) without '
+            'a call id, so its result could not be sent back. Your '
+            'work is safe on the board.',
           );
         }
       }
-      if (_closed) return;
-      // Safety valve: after too many failing rounds, one last request
-      // with tools disabled lets the model wrap up in words instead of
-      // looping on failures forever.
+
+      // Collect every outcome of the round (most already finished
+      // while the response was streaming) and answer ALL of them in
+      // the single follow-up request made by the next round - never
+      // one request per call, which would break the history.
+      final outputs = <Map<String, dynamic>>[];
+      final answeredCallIds = <String>{};
+      final firstOutcomeByCallId = <String, AiToolResult>{};
+      for (final pending in inFlight) {
+        if (pending.callId.isNotEmpty && !answeredCallIds.add(pending.callId)) {
+          // Exactly one function_call_output per call_id, always -
+          // a duplicate is a hard API rejection, not a retryable
+          // error. Skip the second copy's output entirely.
+          texaDiag(
+            'ai',
+            'round $round output SUPPRESSED duplicate callId=${pending.callId} name=${pending.call.name}',
+          );
+          final first = firstOutcomeByCallId[pending.callId];
+          if (first != null) {
+            pending.entry['status'] = first.success ? 'success' : 'error';
+            pending.entry['output'] = first.wireOutput;
+          }
+          continue;
+        }
+        texaDiag(
+          'ai',
+          'round $round await outcome name=${pending.call.name} callId=${pending.callId.isEmpty ? 'MISSING' : pending.callId}',
+        );
+        // Race the outcome against cancellation: an interrupted
+        // turn must end even if the action in flight never reports
+        // back (its result is stale by then and must not be sent).
+        final outcome = await Future.any<AiToolResult>([
+          pending.outcome,
+          cancellation.signal.then(
+            (_) => const AiToolResult.failure('Turn was interrupted.'),
+          ),
+        ]);
+        texaDiag(
+          'ai',
+          'round $round outcome name=${pending.call.name} callId=${pending.callId} success=${outcome.success} output=${diagText(outcome.wireOutput)}',
+        );
+        if (_isCancelled(cancellation)) return;
+        pending.entry['status'] = outcome.success ? 'success' : 'error';
+        pending.entry['output'] = outcome.wireOutput;
+        if (pending.callId.isNotEmpty) {
+          firstOutcomeByCallId[pending.callId] = outcome;
+        }
+        outputs.add({
+          'type': 'function_call_output',
+          'call_id': pending.callId,
+          'output': outcome.wireOutput,
+        });
+      }
+      // Safety valve: after too many tool rounds, one last request
+      // with tools disabled lets the model wrap up in words instead
+      // of looping (or leaving its last calls unanswered) forever.
       if (round >= maxToolRounds) wrapUpNext = true;
-      if (pastVideoWindow) {
+      {
         // Self-contained follow-up: the whole turn input, then this
         // round's calls and their outputs, with no stored response
         // to chain on.
+        // Ordered round items (reasoning, text, calls) then all
+        // outputs together - aiItemsToInput would interleave each
+        // output after its call, so build calls from roundItems and
+        // append the batched outputs after them.
         nextInput = [
-          ...failureReplayInput,
-          for (final call in result.calls)
-            {
-              'type': 'function_call',
-              'call_id': call.callId,
-              'name': call.name,
-              'arguments': jsonEncode(call.args),
-            },
+          ...replayFollowUpInput,
+          for (final item in aiItemsToInput(roundItems, 'round'))
+            if (item['type'] != 'function_call_output') item,
           ...outputs,
         ];
-        failureReplayInput = nextInput;
-      } else {
-        nextInput = outputs;
+        replayFollowUpInput = nextInput;
+        texaDiag(
+          'ai',
+          'round $round followup outputs=${outputs.map((o) => o['call_id']).join(',')} nextInput=${diagInputSummary(nextInput)} allItems=${allItems.map((i) => i['kind'] == 'toolCall'
+              ? 'call(${i['name']}:${i['id'] ?? 'MISSING'})'
+              : i['kind'] == 'text'
+              ? 'text(${diagText(i['text'] as String? ?? '')})'
+              : 'reasoning(${i['id'] ?? 'noid'})').join(',')}',
+        );
       }
     }
 
     final raw = <String, dynamic>{
       'text': fullText.toString(),
+      'items': allItems,
       'toolCalls': allCalls,
       'toolOutputsPending': toolOutputsPending,
-      'responseId': previousId,
+      'responseId': null,
       'responseIds': responseIds,
     };
-    yield AiStreamDone(raw, fullText.toString(), responseId: previousId);
+    texaDiag(
+      'ai',
+      'turn done text=${diagText(fullText.toString())} calls=${allCalls.map((c) => '${c['name']}:${c['id'] ?? 'MISSING'}:${c['status'] ?? 'nostatus'}').join(' | ')} items=${allItems.map((i) => i['kind']).join(',')} responseIds=$responseIds',
+    );
+    yield AiStreamDone(raw, fullText.toString(), responseId: null);
   }
 
-  /// Streams a single Responses API request (stored per
-  /// [storeResponse], chained on [previousResponseId] when given) and
-  /// finishes with a
+  /// Streams a single stateless Responses API request (`store:
+  /// false` unless [storeResponse] is set) and finishes with a
   /// [_ResponseRound] describing the completed response: its id, its
   /// full text and every function call it asked for, with real call ids.
   Stream<AiEvent> _streamOneResponse({
+    required _RequestCancellation cancellation,
     required String model,
     required String instructions,
     required List<Map<String, dynamic>> input,
-    required String? previousResponseId,
     required String? reasoningEffort,
     required bool allowTools,
-    bool storeResponse = true,
+    bool storeResponse = false,
     bool includeTools = true,
   }) async* {
     final fullText = StringBuffer();
@@ -1004,6 +1424,54 @@ class AiClient {
     final completedCalls =
         <({String callId, String name, Map<String, dynamic> args})>[];
     final emittedTools = <String>{};
+    final reasoningItems = <Map<String, dynamic>>[];
+    final seenReasoning = <String>{};
+    bool captureReasoning(dynamic item) {
+      if (item is! Map || item['type'] != 'reasoning') return false;
+      final map = item.cast<String, dynamic>();
+      final id = (map['id'] ?? '').toString();
+      final enc = (map['encrypted_content'] ?? '').toString();
+      for (var i = 0; i < reasoningItems.length; i++) {
+        final existing = reasoningItems[i];
+        final sameId = id.isNotEmpty && existing['id']?.toString() == id;
+        final sameEnc =
+            enc.isNotEmpty && existing['encrypted_content']?.toString() == enc;
+        if (sameId || sameEnc) {
+          // Same reasoning item reported again (e.g. only the terminal
+          // copy carries encrypted_content): upgrade the stored copy
+          // so the encrypted payload is not lost to the first, poorer
+          // copy. Report it again only if it actually gained the
+          // encrypted payload.
+          final hadEnc = (existing['encrypted_content'] ?? '')
+              .toString()
+              .isNotEmpty;
+          if (!hadEnc && enc.isNotEmpty) {
+            reasoningItems[i] = {...existing, ...map};
+            texaDiag(
+              'ai',
+              'reasoning upgraded with encrypted id=$id enc=${diagText(enc)}',
+            );
+            return true;
+          }
+          return false;
+        }
+      }
+      final key = id.isNotEmpty ? id : enc;
+      if (key.isNotEmpty && !seenReasoning.add(key)) {
+        texaDiag(
+          'ai',
+          'reasoning duplicate skipped id=$id enc=${diagText(enc)}',
+        );
+        return false;
+      }
+      reasoningItems.add(map);
+      texaDiag(
+        'ai',
+        'reasoning captured id=${id.isEmpty ? 'none' : id} enc=${enc.isEmpty ? 'MISSING' : diagText(enc)} count=${reasoningItems.length}',
+      );
+      return true;
+    }
+
     final completedIndexByKey = <String, int>{};
     String? responseId;
     var sawEvent = false;
@@ -1031,24 +1499,119 @@ class AiClient {
       }
     }
 
-    AiToolCallComplete? finishCall(
-      String key, {
-      bool allowMissingCallId = false,
+    /// Every identifier ever seen for one physical call, mapped to
+    /// the key that call is tracked under. Stream events for the same
+    /// call variously carry `output_index`, the item `id`, and the
+    /// `call_id` - and not consistently from one event to the next
+    /// (in release builds against the real provider, the arguments
+    /// events may key by output_index while the item/terminal events
+    /// key by item id, with call_id only on the last of them). Any
+    /// identifier that has been bound once resolves the call forever
+    /// after, regardless of which identifier a later event carries.
+    final callKeyAliases = <String, String>{};
+
+    String bindCallKey({
+      Object? outputIndex,
+      String? itemId,
+      String? callId,
+      String? name,
+      String? arguments,
     }) {
-      if (emittedTools.contains(key)) return null;
+      final identifiers = <String>[
+        if (outputIndex != null) 'idx:$outputIndex',
+        if (itemId != null && itemId.isNotEmpty) 'item:$itemId',
+        if (callId != null && callId.isNotEmpty) 'call:$callId',
+      ];
+      for (final id in identifiers) {
+        final bound = callKeyAliases[id];
+        if (bound != null) {
+          for (final other in identifiers) {
+            callKeyAliases[other] = bound;
+          }
+          return bound;
+        }
+      }
+      // Known call_id carried under a key bound before the id arrived.
+      if (callId != null && callId.isNotEmpty) {
+        for (final key in callOrder) {
+          if (callIds[key] == callId) {
+            for (final id in identifiers) {
+              callKeyAliases[id] = key;
+            }
+            return key;
+          }
+        }
+      }
+      // A call announced by output_item.added (which may carry no
+      // output_index) and still waiting for its arguments: the
+      // arguments events for it key by output_index alone, so bind
+      // them to that pending call instead of minting a second one.
+      if (name != null && name.isNotEmpty) {
+        for (final key in callOrder) {
+          if (callNames[key] == name &&
+              !emittedTools.contains(key) &&
+              (argBuffers[key]?.isEmpty ?? true)) {
+            for (final id in identifiers) {
+              callKeyAliases[id] = key;
+            }
+            return key;
+          }
+        }
+      }
+      // Last resort before minting a new key: same name + canonical
+      // arguments as a call already tracked.
+      if (name != null && arguments != null && arguments.isNotEmpty) {
+        final wanted = _canonicalArgsJson(arguments);
+        for (final key in callOrder) {
+          final knownId = callIds[key];
+          if (knownId != null && knownId.isNotEmpty && knownId != callId) {
+            continue;
+          }
+          if (callNames[key] == name &&
+              _canonicalArgsJson(argBuffers[key].toString()) == wanted) {
+            for (final id in identifiers) {
+              callKeyAliases[id] = key;
+            }
+            return key;
+          }
+        }
+      }
+      final primary = identifiers.isNotEmpty
+          ? identifiers.first
+          : 'anon:${callOrder.length}';
+      for (final id in identifiers) {
+        callKeyAliases[id] = primary;
+      }
+      return primary;
+    }
+
+    AiToolCallComplete? finishCall(String key) {
+      if (emittedTools.contains(key)) {
+        texaDiag(
+          'ai',
+          'call SUPPRESSED duplicate key=$key name=${callNames[key]} callId=${callIds[key]} args=${diagText(argBuffers[key]?.toString() ?? '')} completed=${completedCalls.length}',
+        );
+        return null;
+      }
       final name = callNames[key] ?? '';
-      if (name.isEmpty) return null;
+      if (name.isEmpty) {
+        texaDiag('ai', 'call skipped no-name key=$key');
+        return null;
+      }
+      // Emit as soon as the arguments are whole, even when the
+      // call_id has not appeared yet: execution needs only name and
+      // arguments. When the id does arrive (output item, or the
+      // terminal response), registerCall patches it into
+      // [completedCalls] below - never a synthesised substitute.
       final callId = callIds[key] ?? '';
-      // function_call_arguments.done fires *before* the output item
-      // that carries the call_id, so finishing there would lock the
-      // call in with an empty id. Wait for the id; the output-item and
-      // response-completed events that follow supply it, and the
-      // end-of-stream flush (allowMissingCallId) is the last resort.
-      if (callId.isEmpty && !allowMissingCallId) return null;
       emittedTools.add(key);
       final args = decodeArgs(argBuffers[key]?.toString() ?? '');
       completedIndexByKey[key] = completedCalls.length;
       completedCalls.add((callId: callId, name: name, args: args));
+      texaDiag(
+        'ai',
+        'call EMIT key=$key name=$name callId=${callId.isEmpty ? 'MISSING' : callId} args=${diagJson(args)} completed=${completedCalls.length}',
+      );
       return AiToolCallComplete(name, args, callId: callId);
     }
 
@@ -1061,36 +1624,63 @@ class AiClient {
     }
 
     try {
-      await for (final event in _untilClosed(
-        _openAi.responses
-            .createStream(
-              model: model,
-              instructions: instructions,
-              input: input,
-              parallelToolCalls: true,
-              store: storeResponse,
-              previousResponseId: previousResponseId,
-              tools: includeTools ? toolSchemas() : null,
-              toolChoice: includeTools ? (allowTools ? 'auto' : 'none') : null,
-              reasoning: reasoningEffort == null
-                  ? null
-                  : {'effort': reasoningEffort},
-              // Never hand dart_openai the owned client directly: its
-              // streaming pipeline unconditionally closes whatever
-              // client it is given when the stream ends, so the first
-              // round used to kill the transport and every follow-up
-              // request (starting with the function_call_output round)
-              // failed with "Client is already closed". The wrapper
-              // absorbs that close; [_client] stays alive for every
-              // round of the loop and is only closed by [close].
-              client: _NonClosingClient(
-                _client,
-                abortTrigger: _closeSignal.future,
-              ),
-            )
+      // One POST to the Responses endpoint, streamed back as SSE.
+      // No retries: a failed turn is surfaced (and retried by the
+      // student) instead of silently resent.
+      final sseStream = await _sse.subscribe(
+        method: SseRequestType.post,
+        url: _responsesUrl,
+        header: {..._headers, 'Accept': 'text/event-stream'},
+        body: {
+          'model': model,
+          'instructions': instructions,
+          'input': input,
+          'parallel_tool_calls': true,
+          'store': storeResponse,
+          // Stateless reasoning replay (Meta docs): always request
+          // encrypted reasoning; there is no previous_response_id it
+          // could conflict with.
+          'include': const ['reasoning.encrypted_content'],
+          if (includeTools) 'tools': toolSchemas(),
+          if (includeTools) 'tool_choice': allowTools ? 'auto' : 'none',
+          if (reasoningEffort != null) 'reasoning': {'effort': reasoningEffort},
+          'stream': true,
+        },
+        abortTrigger: cancellation.signal,
+      );
+      if (_isCancelled(cancellation)) return;
+      await for (final sseEvent in _untilCancelled(
+        sseStream
+            .map((sseEvent) {
+              final data = sseEvent.data?.trim() ?? '';
+              if (data.isEmpty || data == '[DONE]') return null;
+              try {
+                final decoded = jsonDecode(data);
+                return decoded is Map<String, dynamic> ? decoded : null;
+              } on FormatException {
+                // Partial/garbled event: skip it, the next one may
+                // still complete the response.
+                return null;
+              }
+            })
+            .where((event) => event != null)
+            .cast<Map<String, dynamic>>()
+            // Idle timeout: fires only when no event has arrived for
+            // this long, not over the life of a healthy stream.
             .timeout(const Duration(seconds: responseTimeoutSeconds)),
+        cancellation,
       )) {
+        final event = sseEvent;
         sawEvent = true;
+        if (event['type'] == null && event['error'] != null) {
+          final error = event['error'];
+          final message = error is Map
+              ? (error['message'] as String? ?? '')
+              : '';
+          throw AppError(
+            'Meta AI rejected that turn. ${message.length > 140 ? '' : message} Your work is safe on the board.',
+          );
+        }
         switch (event['type']) {
           case 'response.created' || 'response.in_progress':
             captureResponseId(event);
@@ -1101,14 +1691,22 @@ class AiClient {
               yield AiTextDelta(delta);
             }
           case 'response.function_call_arguments.delta':
-            final key = (event['item_id'] ?? event['output_index'] ?? '')
-                .toString();
+            final key = bindCallKey(
+              outputIndex: event['output_index'],
+              itemId: event['item_id'] as String?,
+              callId: event['call_id'] as String?,
+            );
             registerCall(key, null, event['call_id'] as String?);
             final delta = event['delta'];
             if (delta is String) argBuffers[key]!.write(delta);
           case 'response.function_call_arguments.done':
-            final key = (event['item_id'] ?? event['output_index'] ?? '')
-                .toString();
+            final key = bindCallKey(
+              outputIndex: event['output_index'],
+              itemId: event['item_id'] as String?,
+              callId: event['call_id'] as String?,
+              name: event['name'] as String?,
+              arguments: event['arguments'] as String?,
+            );
             registerCall(
               key,
               event['name'] as String?,
@@ -1129,7 +1727,12 @@ class AiClient {
             // output_item.done once its arguments are whole.
             final item = event['item'];
             if (item is Map && item['type'] == 'function_call') {
-              final key = (item['id'] ?? item['call_id'] ?? '').toString();
+              final key = bindCallKey(
+                outputIndex: event['output_index'],
+                itemId: item['id'] as String?,
+                callId: item['call_id'] as String?,
+                name: item['name'] as String?,
+              );
               registerCall(
                 key,
                 item['name'] as String?,
@@ -1138,8 +1741,19 @@ class AiClient {
             }
           case 'response.output_item.done':
             final item = event['item'];
+            if (item is Map && item['type'] == 'reasoning') {
+              if (captureReasoning(item)) {
+                yield AiReasoningComplete(reasoningItems.last);
+              }
+            }
             if (item is Map && item['type'] == 'function_call') {
-              final key = (item['id'] ?? item['call_id'] ?? '').toString();
+              final key = bindCallKey(
+                outputIndex: event['output_index'],
+                itemId: item['id'] as String?,
+                callId: item['call_id'] as String?,
+                name: item['name'] as String?,
+                arguments: item['arguments'] as String?,
+              );
               registerCall(
                 key,
                 item['name'] as String?,
@@ -1156,14 +1770,37 @@ class AiClient {
             }
           case 'response.completed':
             captureResponseId(event);
+            {
+              final r = event['response'];
+              final o = r is Map ? r['output'] : null;
+              texaDiag(
+                'ai',
+                'response.completed id=$responseId output=${o is List ? o.map((i) => i is Map ? '${i['type']}:${i['id'] ?? i['call_id'] ?? ''}:${i['name'] ?? ''}' : '?').join(' | ') : 'none'} textSoFar=${diagText(fullText.toString())} callsSoFar=${completedCalls.map((c) => '${c.name}:${c.callId.isEmpty ? 'MISSING' : c.callId}').join(' | ')}',
+              );
+            }
             // Fallback: emit any function calls the terminal event carries
             // that were not already completed mid-stream.
             final response = event['response'];
             final output = response is Map ? response['output'] : null;
             if (output is List) {
-              for (final item in output) {
+              for (var outIndex = 0; outIndex < output.length; outIndex++) {
+                final item = output[outIndex];
+                if (item is Map && item['type'] == 'reasoning') {
+                  if (captureReasoning(item)) {
+                    yield AiReasoningComplete(reasoningItems.last);
+                  }
+                }
                 if (item is Map && item['type'] == 'function_call') {
-                  final key = (item['id'] ?? item['call_id'] ?? '').toString();
+                  // The item's position in the terminal output is its
+                  // output_index - the same identity the streaming
+                  // events for this call were keyed by.
+                  final key = bindCallKey(
+                    outputIndex: outIndex,
+                    itemId: item['id'] as String?,
+                    callId: item['call_id'] as String?,
+                    name: item['name'] as String?,
+                    arguments: item['arguments'] as String?,
+                  );
                   registerCall(
                     key,
                     item['name'] as String?,
@@ -1192,38 +1829,39 @@ class AiClient {
             );
         }
       }
-    } on RequestFailedException catch (e) {
-      if (_closed) return;
+    } on SseHttpException catch (e) {
+      if (_isCancelled(cancellation)) return;
       debugPrint(e.message);
       if (e.statusCode == 429) {
         throw const AppError(
           'Meta AI is busy right now. Wait a moment, then retry your turn.',
         );
       }
+      final message = e.message;
       throw AppError(
-        'Meta AI rejected that turn (${e.statusCode}). ${e.message.length > 140 ? '' : e.message} Your work is safe on the board.',
+        'Meta AI rejected that turn (${e.statusCode}). ${message.length > 140 ? '' : message} Your work is safe on the board.',
         cause: e,
       );
     } on TimeoutException catch (e) {
-      if (_closed) return;
+      if (_isCancelled(cancellation)) return;
       throw AppError(
         'Meta AI took too long to reply. Please retry your turn.',
         cause: e,
       );
     } on AppError {
-      if (_closed) return;
+      if (_isCancelled(cancellation)) return;
       rethrow;
     } catch (e) {
-      if (_closed) return;
+      if (_isCancelled(cancellation)) return;
       debugPrint("Meta AI API call failed: $e");
       throw AppError(
         'Could not reach Meta AI. Check your connection and retry your turn.',
         cause: e,
       );
     }
-    // The transport was closed mid-stream and the stream simply ended:
-    // that is an abort, not a reply, so emit no round at all.
-    if (_closed) return;
+    // Cancelled mid-stream and the stream simply ended: that is an
+    // abort, not a reply, so emit no round at all.
+    if (_isCancelled(cancellation)) return;
     if (!sawEvent) {
       throw const AppError(
         'Meta AI returned an empty reply. Please retry your turn.',
@@ -1233,74 +1871,30 @@ class AiClient {
       // Last resort for a stream that ended without an output item:
       // surface the call even without an id. streamTurn refuses to
       // answer such a call (see there) rather than inventing an id.
-      final done = finishCall(key, allowMissingCallId: true);
+      final done = finishCall(key);
       if (done != null) yield done;
     }
     yield _ResponseRound(
       responseId: responseId,
       text: fullText.toString(),
       calls: completedCalls,
+      reasoning: reasoningItems,
     );
   }
 }
 
-/// Delegates to [AiClient]'s owned client but ignores [close].
-///
-/// `dart_openai` closes the client passed to a streaming request in a
-/// `finally` block, whether it created that client or the caller did.
-/// Handing it this wrapper per request keeps ownership (and the actual
-/// close) with [AiClient], so one client can serve every request of a
-/// turn - including a `function_call_output` failure follow-up.
-/// Wraps the AiClient's owned transport for handing to dart_openai.
-///
-/// Two jobs:
-///
-///  * Absorb dart_openai's close: its streaming pipeline
-///    unconditionally closes whatever client it is given when the
-///    stream ends, which used to kill the transport after the first
-///    round so every `function_call_output` follow-up failed with
-///    "Client is already closed". [close] is a no-op here; the owned
-///    client is only closed by `AiClient.close`.
-///
-///  * Give the request a real abort trigger. dart_openai has no
-///    cancellation API (no `AbortSignal`-equivalent parameter; it
-///    builds a plain `http.Request` internally), so the only lever is
-///    the transport: package:http clients (BrowserClient/IOClient)
-///    honour `AbortableRequest.abortTrigger` at every phase - before
-///    the request is sent, while awaiting response headers, and while
-///    streaming - exactly like the JS SDK's AbortSignal. Rewriting the
-///    request here, with the trigger wired to the owner's close
-///    signal, makes `AiClient.close()` abort the in-flight request at
-///    the socket/fetch level instead of merely abandoning it locally.
-class _NonClosingClient extends http.BaseClient {
-  _NonClosingClient(this._inner, {this._abortTrigger});
+/// One request/turn's cancellation signal: completing it aborts the
+/// in-flight HTTP request (via its abort trigger) and promptly ends
+/// the locally-awaited stream. A fresh instance per turn is what lets
+/// one long-lived [AiClient] offer the isolation a fresh client per
+/// turn used to provide.
+class _RequestCancellation {
+  final Completer<void> _completer = Completer<void>();
 
-  final http.Client _inner;
-  final Future<void>? _abortTrigger;
+  bool get isCancelled => _completer.isCompleted;
+  Future<void> get signal => _completer.future;
 
-  @override
-  Future<http.StreamedResponse> send(http.BaseRequest request) async {
-    final trigger = _abortTrigger;
-    if (trigger == null ||
-        request is http.MultipartRequest ||
-        request is http.Abortable) {
-      return _inner.send(request);
-    }
-    final bodyBytes = await request.finalize().toBytes();
-    final abortable =
-        http.AbortableRequest(
-            request.method,
-            request.url,
-            abortTrigger: trigger,
-          )
-          ..headers.addAll(request.headers)
-          ..bodyBytes = bodyBytes
-          ..followRedirects = request.followRedirects
-          ..maxRedirects = request.maxRedirects
-          ..persistentConnection = request.persistentConnection;
-    return _inner.send(abortable);
+  void cancel() {
+    if (!_completer.isCompleted) _completer.complete();
   }
-
-  @override
-  void close() {}
 }

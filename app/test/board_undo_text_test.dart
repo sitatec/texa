@@ -92,6 +92,26 @@ void main() {
       expect(BoardController.boardTextStyle(30).fontFamily, 'GoogleSansFlex');
     });
 
+    test('longer single-line text gets length-proportional slack', () {
+      final c = BoardController();
+      const text =
+          'This longer sentence should stay on one line with space '
+          'still empty to its right';
+      final rect = c.textRectFor(x: 60, y: 60, text: text, fontSize: 10);
+      final natural = BoardController.measureBoardText(
+        text,
+        10,
+        double.infinity,
+      ).width;
+
+      // At least 8% over the measured width, rather than the old fixed
+      // few pixels of slack, whose margin was exhausted as small
+      // per-character measurement differences accumulated over a
+      // longer sentence.
+      expect(rect.width, greaterThanOrEqualTo(natural * 1.08));
+      expect(rect.height, lessThan(10 * 1.15 * 2));
+    });
+
     test('text that would run past the board bottom shrinks its font', () {
       final c = BoardController();
       // Six lines at font size 40 need ~276 units of height; only 100

@@ -9,15 +9,5 @@ import '_http_client_factory.dart'
 abstract class TexaHttpClient {
   static Future<void> setup() => setupInternal();
 
-  static Client get instance {
-    _instance ??= createHttpClient();
-    return _instance!;
-  }
-
-  static Client? _instance;
-
-  static void dispose() {
-    instance.close();
-    _instance = null;
-  }
+  static Client create() => createHttpClient();
 }

@@ -195,7 +195,12 @@ class _SetupScreenState extends State<SetupScreen> {
       _error = null;
     });
     try {
-      await AiClient(_key.text.trim()).testConnection();
+      final client = AiClient(_key.text.trim());
+      try {
+        await client.testConnection();
+      } finally {
+        client.close();
+      }
       await widget.app.saveSettings(
         widget.app.settings.copyWith(apiKey: _key.text.trim()),
       );

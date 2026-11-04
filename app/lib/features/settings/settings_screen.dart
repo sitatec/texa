@@ -244,7 +244,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _message = null;
     });
     try {
-      await AiClient(_key.text.trim()).testConnection();
+      final client = AiClient(_key.text.trim());
+      try {
+        await client.testConnection();
+      } finally {
+        client.close();
+      }
       setState(() => _message = tr.setup.connectionOk);
     } on AppError catch (e) {
       setState(() => _message = e.message);

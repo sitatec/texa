@@ -68,6 +68,7 @@ class _HomeScreenState extends State<HomeScreen> {
       listenable: app,
       builder: (context, _) => Scaffold(
         appBar: TexaAppBar(
+          automaticallyImplyLeading: false,
           maxWidth: 880,
           actions: [
             IconButton(
