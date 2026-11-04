@@ -26,11 +26,11 @@
       ]
     },
     {
-      "name": "App Wasm (dev debug)",
+      "name": "App Wasm (dev release)",
       "cwd": "app",
       "request": "launch",
       "type": "dart",
-      "flutterMode": "debug",
+      "flutterMode": "release",
       "program": "lib/main.dart",
       "args": [
         "--wasm",

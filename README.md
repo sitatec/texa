@@ -9,10 +9,9 @@ Texa is an AI STEM tutor (Maths, Physics, Chemistry) for middle- and high-school
 |                  |                                                                                                     |
 | ---------------- | --------------------------------------------------------------------------------------------------- |
 | **Platforms**    | Android, iOS, macOS, Web (Windows planned, not yet supported)                                       |
-| **Stack**        | Flutter app in [`app/`](app/) — no custom backend                                                   |
+| **Live Demo**    | https://texa.berete.dev                                                                             |
 | **Full details** | [PRD (Product Requirements Document)](docs/PRD.md) · [Technical Specifications](docs/TECH_SPECS.md) |
 | **License**      | [GNU AGPL v3](LICENSE)                                                                              |
-
 
 ## How this project was built in 10 days
 
