@@ -9,6 +9,7 @@ import 'package:texa/core/constants.dart';
 import 'package:texa/core/utils/context_utils.dart';
 import 'package:texa/core/utils/fullscreen/fullscreen_manager.dart';
 import 'package:texa/core/widgets/texa_app_bar.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../core/theme.dart';
 import '../../generated/i18n/translations.g.dart';
@@ -76,6 +77,7 @@ class _SessionScreenState extends State<SessionScreen> {
         setState(() {});
       });
     });
+    WakelockPlus.enable();
     unawaited(c.init());
     c.addListener(_onControllerChanged);
     // macOS has no echo cancellation in this version (see
@@ -165,9 +167,12 @@ class _SessionScreenState extends State<SessionScreen> {
   @override
   void dispose() {
     c.removeListener(_onControllerChanged);
-    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    WakelockPlus.disable();
     c.dispose();
+    try {
+      _fullScreenManager.exitFullScreen();
+    } catch (_) {}
+
     _fullScreenManager.dispose();
     super.dispose();
   }
