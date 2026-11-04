@@ -27,12 +27,14 @@ echo "Deploying release $VERSION..."
 
 cd web/texa-webspeech && npm run build && cd ../../
 
-flutter build web --release --wasm
+flutter build web --release --wasm --dart-define=WASM_BASE_URL=https://cdn.jsdelivr.net/npm/onnxruntime-web@[VERSION]/dist/
 
 # sherpa_onnx is not used in web so delete its heavy wasm files to reduce web startup time.
 rm -rf build/web/assets/packages/sherpa_onnx_web
 # Remove the texa-webspeech source code, the build outputs are included.
 rm -rf build/web/texa-webspeech
+# Remove the heavy ort wasm files that exceeds cloudflare workers' limit (25MB per file). We provided WASM_BASE_URL above
+rm -rf build/web/ort-wasm
 
 bunx wrangler@4.142.0 deploy --env "$ENV" --cwd build/web
 

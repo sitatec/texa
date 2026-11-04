@@ -41,7 +41,10 @@ class WebSpeechEngine implements SpeechEngine {
   @override
   bool get isReady => _tts != null;
 
-  String get _wasmBaseUrl => Uri.base.resolve('ort-wasm/').toString();
+  String get _wasmBaseUrl => String.fromEnvironment(
+    "WASM_BASE_URL",
+    defaultValue: Uri.base.resolve('ort-wasm/').toString(),
+  );
 
   static String _relative(String path) => path.startsWith('/texa-models/')
       ? path.substring('/texa-models/'.length)
