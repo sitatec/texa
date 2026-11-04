@@ -15,7 +15,7 @@ Texa is an AI STEM tutor (Maths, Physics, Chemistry) for middle- and high-school
 
 ## How this project was built in 10 days
 
-The project was initialized on `Oct 26 2026` and every single line of code was written between then and `Nov 04 2026`, including app code, docs, branding (logos & image assets).
+The project was initialized on `Oct 26, 2026` and every single line of code was written between then and `Nov 04, 2026`, including app code, docs, branding (logos & image assets).
 
 I came up with the idea and technical design, then validated and refined through brainstorming with Meta's muse-wonder-1.0 AI model with web search tool.
 The code implementation, however, was **fully carried out by Muse Wonder 1.0 as a coding agent** — my role was to review and test its work and make minor adjustments when needed; I have probably written less than 1% of the code myself.
@@ -94,27 +94,43 @@ If it works, the impact is simple to state: **every student gets one-to-one help
 
 ```mermaid
 flowchart LR
-  subgraph Device["📱 Flutter app — everything below runs on-device / in-browser"]
+  Student(["Student<br/>draws + talks"])
+
+  subgraph S1["1 · In the app — student works"]
+    direction TB
     Board["Shared whiteboard<br/>1600 × 1200 · custom engine"]
-    Capture["Turn capture<br/>1 FPS frames + 16 kHz mic"]
-    VAD["🎙️ Silero VAD + Smart Turn<br/>local · sherpa-onnx / Web Worker"]
-    Client["Meta AI client<br/>dart_openai · SSE streaming"]
-    Playback["Playback engine<br/>ordered speech + drawing timeline"]
-    TTS["🔊 Kokoro / Piper TTS<br/>local · sentence chunks"]
-    Render["Renderers<br/>SVG · LaTeX · function plotter"]
-    DB[("Local storage<br/>tostore + secure key storage")]
-    Board --> Capture
-    VAD --> Capture
-    Capture --> Client
-    Client --> Playback
-    Playback --> Board
-    Playback --> TTS
-    Playback --> Render
-    Render --> Board
-    Board <--> DB
-    Client <--> DB
+    Listen["Silero VAD + Smart Turn<br/>detects speech, judges turn end"]
   end
-  Client -- "HTTPS · your API key · MP4 (video + embedded audio) + tool schemas" --> API["☁️ Meta AI API<br/>api.meta.ai/v1"]
+
+  subgraph S2["2 · In the app — turn goes out"]
+    direction TB
+    Capture["Turn capture + encoder<br/>1 FPS board video + mic audio as one MP4"]
+    Client["Meta AI client<br/>sends turn, streams the reply"]
+    Capture --> Client
+  end
+
+  subgraph S3["3 · Meta AI API — the only remote step"]
+    direction TB
+    API["Muse model<br/>understands the video and its audio"]
+  end
+
+  subgraph S4["4 · In the app — tutor replies"]
+    direction TB
+    Playback["Playback engine<br/>one ordered speech + drawing timeline"]
+    Present["Renderers + Kokoro / Piper TTS<br/>SVG · LaTeX · plots · spoken sentences + captions"]
+    Playback --> Present
+  end
+
+  Store[("Local storage<br/>sessions · board · messages<br/>API key in secure storage")]
+
+  Student --> Board
+  Listen --> Capture
+  Board --> Capture
+  Client -->|"MP4 turn + conversation context"| API
+  API -->|"streamed explanation + board actions"| Playback
+  Present -.->|"tutor draws and speaks on the same board"| Board
+  Board -.->|"autosave"| Store
+  Client -.->|"save messages"| Store
 ```
 
 ### One tutoring turn
@@ -122,19 +138,20 @@ flowchart LR
 ```mermaid
 sequenceDiagram
   participant S as Student
-  participant A as Texa (on-device)
-  participant M as Muse model (Meta AI API)
-  S->>A: Draws + talks 🎙️
-  A->>A: VAD detects speech; Smart Turn judges the turn is finished
-  A->>A: Encode turn as MP4 — 1 FPS, 540 × 720, embedded 16 kHz audio
-  A->>M: Send MP4 + conversation context + board tool schemas
-  loop Streamed reply (SSE)
-    M-->>A: Sentence of explanation
-    A->>A: Synthesise + speak it 🔊 (next chunk prefetched)
-    M-->>A: Completed board tool call
-    A->>A: Draw it in, in sync with the speech
+  participant A as Texa on-device
+  participant M as Muse model via Meta AI API
+  S->>A: Draws and talks
+  A->>A: Silero VAD detects speech
+  A->>A: Smart Turn confirms the turn has ended
+  A->>A: Encode the turn as one MP4 at 1 FPS with embedded audio
+  A->>M: Send the MP4 with the conversation context
+  loop Streamed reply
+    M-->>A: One sentence of explanation
+    A->>A: Synthesise and speak that sentence
+    M-->>A: One completed board action
+    A->>A: Draw it in step with the speech
   end
-  Note over S,A: Student speaks mid-reply → playback suspends within ~200 ms.<br/>Noise (<300 ms) resumes it; a real interruption becomes the next turn.
+  Note over S,A: If the student speaks during playback, Texa pauses and listens. Brief noise resumes the reply, while a real interruption becomes the next turn.
 ```
 
 ### Key design decisions
