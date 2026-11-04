@@ -40,6 +40,9 @@ dependencies:
   chewie: ^1.17.4
   video_player: ^2.14.0
   flutter_native_splash: ^2.4.8
+  cupertino_http: ^3.0.2
+  cronet_http: ^1.9.0
+  fetch_client: ^1.2.1
   sherpa_onnx:
     path: ./sherpa-onnx/flutter/sherpa_onnx
 
