@@ -226,6 +226,8 @@ flutter run \
 -d chrome \
 --web-header=Cross-Origin-Embedder-Policy=require-corp \
 --web-header=Cross-Origin-Opener-Policy=same-origin
+
+# If you notice UI lags, build in release mode by adding the --release flag to the run command.
 ```
 
 Alternatively, open the repository in VS Code and launch **App (dev debug)** from [`.vscode/launch.json`](.vscode/launch.json), which also points the speech-model URLs at a local model server (run `bash app/models/startserver.sh` first; without those dart-defines, builds simply download the production models on first launch).
