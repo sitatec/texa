@@ -216,13 +216,16 @@ This builds the Web speech Workers into `app/web/`. (The Web app must be served 
 ```bash
 cd app # if not already in the app dir
 flutter pub get
-flutter run --wasm \
+# Native Apps
+flutter run --flavor dev -d <device> # Replace <device>: e.g. -d macos, -d <android emulator id or ios simulator id>
+# Web (wasm)
+flutter run --wasm --flavor dev -d chrome
+# Web (standard, fallback if wasm fails)
+flutter run \
 --flavor dev \
--d <device> \
+-d chrome \
 --web-header=Cross-Origin-Embedder-Policy=require-corp \
 --web-header=Cross-Origin-Opener-Policy=same-origin
-
-# Replace <device>: e.g. -d chrome, -d macos, -d <android emulator id or ios simulator id>
 ```
 
 Alternatively, open the repository in VS Code and launch **App (dev debug)** from [`.vscode/launch.json`](.vscode/launch.json), which also points the speech-model URLs at a local model server (run `bash app/models/startserver.sh` first; without those dart-defines, builds simply download the production models on first launch).
